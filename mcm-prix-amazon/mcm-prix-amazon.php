@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.1
+ * Version:     1.2.2
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.1';
+    const VERSION      = '1.2.2';
     const SLUG         = 'mcm-prix-amazon';
 
     const OPT_SETTINGS = 'mcm_prix_settings';
@@ -1329,12 +1329,15 @@ final class MCM_Prix
                     .mcm-p-ok { background: #edfaef; color: #0a5b1e; }
                     .mcm-p-new { background: #f0f0f1; color: #50575e; }
                     .mcm-ecart-hors { background: #fcf0d4; color: #8a4b00; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
-                    .mcm-prix-suivis td.mcm-nom, .mcm-prix-suivis td.mcm-art { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .mcm-prix-suivis td.mcm-nom { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .mcm-prix-suivis td.mcm-ts { white-space: nowrap; }
+                    .mcm-prix-suivis td.mcm-art { max-width: 280px; }
                     .mcm-prix-suivis td.mcm-art a { text-decoration: none; }
+                    .mcm-prix-suivis td.mcm-art .mcm-l { display: flex; align-items: center; gap: 4px; }
+                    .mcm-prix-suivis td.mcm-art .mcm-t { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .mcm-prix-suivis td.mcm-art .mcm-x { flex: 0 0 auto; }
                     .mcm-prix-suivis td.mcm-art .dashicons { font-size: 14px; width: 14px; height: 14px; vertical-align: middle; }
-                    .mcm-prix-suivis td.mcm-art details { display: inline; }
-                    .mcm-prix-suivis td.mcm-art summary { display: inline; cursor: pointer; color: #2271b1; }
-                    .mcm-prix-suivis td.mcm-art details[open] { display: block; white-space: normal; }
+                    .mcm-prix-suivis td.mcm-art summary { cursor: pointer; color: #2271b1; }
                 </style>
                 <div class="mcm-bar" id="mcm-bar">
                     <button type="button" class="button is-on" data-f="all">Tous <span class="mcm-n">(<?php echo (int) count($lignes); ?>)</span></button>
@@ -1364,18 +1367,18 @@ final class MCM_Prix
                                 if ($r['hors']) { echo '<span class="mcm-ecart-hors" title="Écart supérieur ou égal au seuil de ' . (int) $seuil . ' %">' . esc_html($r['ecart']) . '</span>'; }
                                 else { echo esc_html($r['ecart']); }
                             ?></td>
-                            <td data-v="<?php echo (int) ($e['ts'] ?? 0) ?: ''; ?>"><?php echo $fmt($e['ts'] ?? 0); ?></td>
+                            <td class="mcm-ts" data-v="<?php echo (int) ($e['ts'] ?? 0) ?: ''; ?>"><?php echo $fmt($e['ts'] ?? 0); ?></td>
                             <td data-v="<?php echo (int) $rang[$cle]; ?>"><span class="mcm-pill mcm-p-<?php echo esc_attr($cle); ?>" title="<?php echo esc_attr($labels[$cle]); ?>"><span class="dashicons dashicons-<?php echo esc_attr($icones[$cle]); ?>"></span> <?php echo esc_html($r['etat']); ?></span></td>
                             <td class="mcm-art"><?php
                                 $liste = $r['liste'];
                                 $ligne = function ($p) {
-                                    return '<a href="' . esc_url($p['url']) . '" title="' . esc_attr($p['title']) . '">' . esc_html(self::short_title($p['title'])) . '</a> '
-                                        . '<a href="' . esc_url($p['view']) . '" target="_blank" rel="noopener" title="Voir l\'article en ligne"><span class="dashicons dashicons-external"></span></a>';
+                                    return '<div class="mcm-l"><a class="mcm-t" href="' . esc_url($p['url']) . '" title="' . esc_attr($p['title']) . '">' . esc_html(self::short_title($p['title'])) . '</a>'
+                                        . '<a class="mcm-x" href="' . esc_url($p['view']) . '" target="_blank" rel="noopener" title="Voir l\'article en ligne"><span class="dashicons dashicons-external"></span></a></div>';
                                 };
-                                foreach (array_slice($liste, 0, 2) as $p) { echo $ligne($p) . '<br>'; }
+                                foreach (array_slice($liste, 0, 2) as $p) { echo $ligne($p); }
                                 if (count($liste) > 2) {
                                     echo '<details><summary>+' . (count($liste) - 2) . ' autre' . (count($liste) > 3 ? 's' : '') . '</summary>';
-                                    foreach (array_slice($liste, 2) as $p) { echo $ligne($p) . '<br>'; }
+                                    foreach (array_slice($liste, 2) as $p) { echo $ligne($p); }
                                     echo '</details>';
                                 }
                             ?></td></tr>

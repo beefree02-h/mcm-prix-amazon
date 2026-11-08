@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.2.2
+- Tableau « Prix suivis » : l'icône vers l'article en ligne reste visible même quand le titre est tronqué ; la date de relevé tient sur une seule ligne.
+
 ## 1.2.1
 - Tableau « Prix suivis » : code couleur par état (vert à jour, orange à surveiller, rouge problème, gris pas encore relevé), pastilles de filtre avec compteurs, filtre par article, recherche par produit ou ASIN, tri par clic sur les en-têtes. Les problèmes s'affichent en premier.
 - La cellule « Écart » est colorée quand l'écart atteint le seuil réglé ; l'état de la ligne n'en dépend pas.
