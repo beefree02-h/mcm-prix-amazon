@@ -1,0 +1,52 @@
+PRIX AMAZON CREATORS — mode d'emploi
+=====================================
+
+1. INSTALLATION (à refaire sur chacun des 6 sites)
+   Extensions > Ajouter > Téléverser une extension > choisir mcm-prix-amazon.zip > Activer.
+
+2. RÉGLAGES  (Réglages > Prix Amazon)
+   - Identifiant client : celui d'Associates Central (amzn1.application-oa2-client....)
+   - Secret             : celui copié à la création (jamais affiché une 2e fois)
+   - Version            : 3.2 (Europe)
+   - Tag Partenaires    : le tag DU SITE (ex. monchoixmalinfr-21 pour monchoixmalin.fr)
+   - Boutique           : www.amazon.fr
+   Les mêmes identifiants/secret servent pour les 6 sites, seul le tag change.
+
+   Option plus sûre pour le secret : le mettre dans wp-config.php au lieu de la base de données :
+       define('MCM_PRIX_CLIENT_SECRET', 'le-secret');
+   (idem MCM_PRIX_CLIENT_ID et MCM_PRIX_PARTNER_TAG si souhaité)
+
+3. TESTER
+   Réglages > Prix Amazon > « Tester » avec un ASIN. Message attendu : « Connexion OK ».
+   Pendant les 48 h qui suivent la création de l'application, l'erreur « AssociateNotEligible »
+   est normale.
+
+4. UTILISATION DANS LES ARTICLES
+       [prix asin="B0GHN39ZGJ"]
+   Remplace un prix écrit à la main. Les ASIN sont enregistrés automatiquement.
+   Options :
+       lien="0"         le prix n'est pas cliquable (à réserver aux cas où un lien « Voir l’offre »
+                        se trouve juste à côté)
+       horodatage="0"   masque l'heure du relevé dans CE shortcode (à réserver aux cas où le même
+                        prix est déjà horodaté juste à côté ; l'avis en bas de page reste affiché)
+
+5. CE QUE FAIT LE PLUGIN
+   - Toutes les 30 minutes, il interroge l'API (10 ASIN par requête, 1 requête/seconde).
+   - Un prix relevé il y a moins de 55 minutes est affiché avec l'heure du relevé et un lien
+     « Précisions » vers l'avis légal en bas de page.
+   - Au-delà, ou si l'API est en panne, ou si le produit n'a pas d'offre : le texte devient
+     « Voir l’offre » (lien affilié). Rien à faire.
+   - Si les prix ne sont plus actualisés depuis plus de 3 h : e-mail à l'administrateur (1 par jour
+     maximum) et bandeau rouge dans l'administration.
+
+6. À SAVOIR
+   - WP-Cron ne tourne que lorsque le site reçoit des visites. Sur un site peu fréquenté, ajoutez
+     dans wp-config.php  define('DISABLE_WP_CRON', true);  puis une tâche planifiée du
+     serveur toutes les 15 min qui appelle  https://votresite.fr/wp-cron.php?doing_wp_cron
+   - Pages en cache : un prix périmé dans une page en cache bascule quand même sur le lien
+     côté navigateur. L'option « Vider le cache de pages » est facultative.
+   - Ne sont pas gérés par l'API : notes et nombres d'avis (à garder manuels), phrases du type
+     « environ 380 € » dans le texte, fourchettes de prix dans les titres et meta descriptions.
+   - L'accès à l'API exige au moins 10 ventes qualifiantes sur 30 jours glissants (tous les tags
+     du compte comptent ensemble). En cas de perte d'accès, le plugin bascule seul sur les liens.
+   - Désinstaller l'extension supprime ses réglages et son cache.
