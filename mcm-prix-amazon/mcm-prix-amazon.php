@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version: 1.1.1
+ * Version:     1.2.0
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.1.1';
+    const VERSION      = '1.2.0';
     const SLUG         = 'mcm-prix-amazon';
 
     const OPT_SETTINGS = 'mcm_prix_settings';
@@ -579,9 +579,39 @@ final class MCM_Prix
             if (!$p || $p->post_status === 'trash') {
                 continue;
             }
-            $out[] = ['title' => get_the_title($p), 'url' => get_edit_post_link($p->ID, 'raw')];
+            $out[] = ['title' => get_the_title($p), 'url' => get_edit_post_link($p->ID, 'raw'), 'view' => get_permalink($p)];
         }
         return $out;
+    }
+
+    /** Titre court : coupé au premier « : », sinon tronqué à 50 caractères. */
+    private static function short_title($title)
+    {
+        $title = trim(wp_strip_all_tags((string) $title));
+        $pos   = mb_strpos($title, ':');
+        if ($pos !== false && $pos > 0) {
+            $title = trim(mb_substr($title, 0, $pos));
+        }
+        return mb_strlen($title) > 50 ? rtrim(mb_substr($title, 0, 49)) . '…' : $title;
+    }
+
+    /** Nom d'un produit : attribut alt de l'image du lien amazon.fr/dp/ASIN dans les articles qui l'utilisent. */
+    private static function product_name($asin, array $meta)
+    {
+        foreach ((array) ($meta[$asin]['posts'] ?? []) as $id) {
+            $p = get_post((int) $id);
+            if (!$p || $p->post_status === 'trash') {
+                continue;
+            }
+            $re = '/<a\b[^>]*\bdp\/' . preg_quote($asin, '/') . '[^>]*>\s*<img\b[^>]*\balt\s*=\s*"([^"]*)"/i';
+            if (preg_match($re, (string) $p->post_content, $m)) {
+                $name = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+                if ($name !== '') {
+                    return mb_strlen($name) > 60 ? rtrim(mb_substr($name, 0, 59)) . '…' : $name;
+                }
+            }
+        }
+        return '';
     }
 
     /** Produits sans offre depuis N jours et prix qui s'écartent de la référence. */
@@ -1221,8 +1251,16 @@ final class MCM_Prix
             <?php if (!$asins) : ?>
                 <p>Aucun ASIN pour l'instant : ils sont ajoutés automatiquement dès qu'un article contient <code>[prix asin="..."]</code>.</p>
             <?php else : ?>
-                <table class="widefat striped" style="max-width:1000px">
-                    <thead><tr><th>ASIN</th><th>Prix</th><th>Référence</th><th>Écart</th><th>Relevé</th><th>État</th><th>Articles</th></tr></thead>
+                <style>
+                    .mcm-prix-suivis td.mcm-nom, .mcm-prix-suivis td.mcm-art { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .mcm-prix-suivis td.mcm-art a { text-decoration: none; }
+                    .mcm-prix-suivis td.mcm-art .dashicons { font-size: 14px; width: 14px; height: 14px; vertical-align: middle; }
+                    .mcm-prix-suivis td.mcm-art details { display: inline; }
+                    .mcm-prix-suivis td.mcm-art summary { display: inline; cursor: pointer; color: #2271b1; }
+                    .mcm-prix-suivis td.mcm-art details[open] { display: block; white-space: normal; }
+                </style>
+                <table class="widefat striped mcm-prix-suivis" style="max-width:1100px">
+                    <thead><tr><th>Produit</th><th>ASIN</th><th>Prix</th><th>Référence</th><th>Écart</th><th>Relevé</th><th>État</th><th>Articles</th></tr></thead>
                     <tbody>
                     <?php foreach (array_keys($asins) as $a) :
                         $e   = $cache[$a] ?? [];
@@ -1240,14 +1278,28 @@ final class MCM_Prix
                             $d     = ((float) $e['offer']['amount'] - (float) $m['ref']) / (float) $m['ref'] * 100;
                             $ecart = ($d > 0 ? '+' : '') . (int) round($d) . ' %';
                         }
+                        $nom = self::product_name($a, $meta);
                         ?>
-                        <tr><td><?php echo esc_html($a); ?></td>
+                        <tr><td class="mcm-nom"<?php echo $nom !== '' ? ' title="' . esc_attr($nom) . '"' : ''; ?>><?php echo $nom !== '' ? esc_html($nom) : '—'; ?></td>
+                            <td><?php echo esc_html($a); ?></td>
                             <td><?php echo !empty($e['offer']) ? esc_html($e['offer']['display']) : '—'; ?></td>
                             <td><?php echo !empty($m['ref']) ? esc_html(self::money($m['ref'])) : '—'; ?></td>
                             <td><?php echo esc_html($ecart); ?></td>
                             <td><?php echo $fmt($e['ts'] ?? 0); ?></td>
                             <td><?php echo esc_html($etat); ?></td>
-                            <td><?php foreach (self::posts_for($a, $meta) as $p) : ?><a href="<?php echo esc_url($p['url']); ?>"><?php echo esc_html($p['title']); ?></a><br><?php endforeach; ?></td></tr>
+                            <td class="mcm-art"><?php
+                                $liste = self::posts_for($a, $meta);
+                                $ligne = function ($p) {
+                                    return '<a href="' . esc_url($p['url']) . '" title="' . esc_attr($p['title']) . '">' . esc_html(self::short_title($p['title'])) . '</a> '
+                                        . '<a href="' . esc_url($p['view']) . '" target="_blank" rel="noopener" title="Voir l\'article en ligne"><span class="dashicons dashicons-external"></span></a>';
+                                };
+                                foreach (array_slice($liste, 0, 2) as $p) { echo $ligne($p) . '<br>'; }
+                                if (count($liste) > 2) {
+                                    echo '<details><summary>+' . (count($liste) - 2) . ' autre' . (count($liste) > 3 ? 's' : '') . '</summary>';
+                                    foreach (array_slice($liste, 2) as $p) { echo $ligne($p) . '<br>'; }
+                                    echo '</details>';
+                                }
+                            ?></td></tr>
                     <?php endforeach; ?>
                     </tbody>
                 </table>

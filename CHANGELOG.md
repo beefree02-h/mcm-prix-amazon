@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.2.0
+- Tableau « Prix suivis » : nouvelle colonne « Produit » (nom lu dans l'image du lien Amazon de l'article), titres d'articles raccourcis (coupés au premier « : »), lien vers l'éditeur et lien vers l'article en ligne, « +N autres » quand un produit est dans plus de 2 articles.
+
 ## 1.1.1
 - Version de contrôle du mécanisme de mise à jour automatique (aucun changement fonctionnel).
 

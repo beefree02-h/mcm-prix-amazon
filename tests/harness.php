@@ -48,7 +48,9 @@ function sanitize_email($s) { return trim((string) $s); }
 function esc_textarea($s) { return htmlspecialchars((string) $s); }
 function human_time_diff($a, $b = 0) { $b = $b ?: time(); return round(abs($b - $a) / 86400) . ' jours'; }
 function wp_is_post_revision($id) { return false; }
-function get_post($id) { return (object) ['ID' => $id, 'post_status' => 'publish']; }
+function get_post($id) { return (object) ['ID' => $id, 'post_status' => 'publish', 'post_content' => $GLOBALS['__content'][$id] ?? '']; }
+function get_permalink($p) { return 'https://example.test/?p=' . $p->ID; }
+function wp_strip_all_tags($s) { return trim(strip_tags((string) $s)); }
 function get_the_title($p) { return 'Titre ' . $p->ID; }
 function get_edit_post_link($id, $ctx = '') { return "https://example.test/wp-admin/post.php?post=$id&action=edit"; }
 function plugin_basename($f) { return 'mcm-prix-amazon/mcm-prix-amazon.php'; }
@@ -319,6 +321,21 @@ check('page de réglages : sections Textes et Surveillance', strpos($page, 'Text
 check('page de réglages : mise à jour 9.9.9 signalée', strpos($page, 'version 9.9.9') !== false);
 check('page de réglages : le secret n\'est jamais affiché', strpos($page, 'SECRET_TEST') === false);
 check('page de réglages : conseil de sécurité (secret en base)', strpos($page, 'Conseil de sécurité') !== false);
+
+// --- 9. Tableau « Prix suivis » : nom du produit et titres courts (v1.2) ---------------------
+$GLOBALS['__content'][42] = '<a class="pap-prod" href="https://www.amazon.fr/dp/B0GQVBWMN8?tag=x"><img src="i.jpg" alt="Bosch MUM S&eacute;rie 2 MUMS2EB01" width="56"></a>';
+$ref = new ReflectionClass('MCM_Prix');
+$nom = $ref->getMethod('product_name'); $nom->setAccessible(true);
+$tit = $ref->getMethod('short_title'); $tit->setAccessible(true);
+$meta = (array) get_option('mcm_prix_meta');
+check('nom du produit lu dans l\'alt de l\'image du lien', $nom->invoke(null, 'B0GQVBWMN8', $meta) === 'Bosch MUM Série 2 MUMS2EB01');
+check('nom du produit : vide si introuvable', $nom->invoke(null, 'B0GHN39ZGJ', $meta) === '');
+check('titre coupé au premier « : »', $tit->invoke(null, 'Meilleur grille-pain pas cher : notre top 5 à moins de 40 €') === 'Meilleur grille-pain pas cher');
+check('titre sans « : » tronqué à 50 caractères', mb_strlen($tit->invoke(null, str_repeat('abcdefghij ', 8))) <= 50 && substr($tit->invoke(null, str_repeat('abcdefghij ', 8)), -3) === '…');
+check('titre court conservé tel quel', $tit->invoke(null, 'Titre 42') === 'Titre 42');
+ob_start(); MCM_Prix::render_admin(); $page2 = ob_get_clean();
+check('tableau : colonne Produit avec le nom', strpos($page2, '<th>Produit</th>') !== false && strpos($page2, 'Bosch MUM Série 2 MUMS2EB01') !== false);
+check('tableau : lien d\'édition et lien vers l\'article en ligne', strpos($page2, 'post=42') !== false && strpos($page2, 'https://example.test/?p=42') !== false);
 
 echo "\n" . ($fail === 0 ? "TOUS LES TESTS PASSENT" : "$fail ÉCHEC(S)") . "\n";
 exit($fail === 0 ? 0 : 1);
