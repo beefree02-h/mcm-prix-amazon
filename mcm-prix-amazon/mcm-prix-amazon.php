@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.0
+ * Version:     1.2.1
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.0';
+    const VERSION      = '1.2.1';
     const SLUG         = 'mcm-prix-amazon';
 
     const OPT_SETTINGS = 'mcm_prix_settings';
@@ -579,9 +579,26 @@ final class MCM_Prix
             if (!$p || $p->post_status === 'trash') {
                 continue;
             }
-            $out[] = ['title' => get_the_title($p), 'url' => get_edit_post_link($p->ID, 'raw'), 'view' => get_permalink($p)];
+            $out[] = ['title' => get_the_title($p), 'id' => (int) $p->ID, 'url' => get_edit_post_link($p->ID, 'raw'), 'view' => get_permalink($p)];
         }
         return $out;
+    }
+
+    /** État d'une ligne du tableau « Prix suivis » : problem, watch, new ou ok (l'écart de prix ne change pas l'état). */
+    public static function suivi_state(array $e, array $m, $days)
+    {
+        $age = !empty($e['ts']) ? time() - (int) $e['ts'] : null;
+        if ($age === null) {
+            return 'new';
+        }
+        if (empty($e['offer'])) {
+            $since = (int) ($m['missing_since'] ?? 0);
+            if (!empty($e['err']) || ($since && (time() - $since) >= max(1, (int) $days) * DAY_IN_SECONDS)) {
+                return 'problem';
+            }
+            return 'watch';
+        }
+        return $age < self::FRESH_MAX ? 'ok' : 'watch';
     }
 
     /** Titre court : coupé au premier « : », sinon tronqué à 50 caractères. */
@@ -1251,7 +1268,67 @@ final class MCM_Prix
             <?php if (!$asins) : ?>
                 <p>Aucun ASIN pour l'instant : ils sont ajoutés automatiquement dès qu'un article contient <code>[prix asin="..."]</code>.</p>
             <?php else : ?>
+                <?php
+                $jours  = max(1, (int) self::opt('alert_days'));
+                $seuil  = max(5, (int) self::opt('deviation_pct'));
+                $rang   = ['problem' => 0, 'watch' => 1, 'new' => 2, 'ok' => 3];
+                $labels = ['problem' => 'Problème', 'watch' => 'À surveiller', 'new' => 'Pas encore relevé', 'ok' => 'À jour'];
+                $icones = ['problem' => 'dismiss', 'watch' => 'warning', 'new' => 'clock', 'ok' => 'yes-alt'];
+                $comptes = ['problem' => 0, 'watch' => 0, 'new' => 0, 'ok' => 0];
+                $arts    = [];
+                $lignes  = [];
+                foreach (array_keys($asins) as $a) {
+                    $e   = $cache[$a] ?? [];
+                    $m   = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
+                    $age = !empty($e['ts']) ? time() - (int) $e['ts'] : null;
+                    if ($age === null) { $etat = 'pas encore relevé'; }
+                    elseif (empty($e['offer'])) {
+                        $etat = 'pas d\'offre' . (!empty($e['err']) ? ' (' . $e['err'] . ')' : '');
+                        if (!empty($m['missing_since'])) { $etat .= ' depuis ' . human_time_diff((int) $m['missing_since']); }
+                    }
+                    elseif ($age < self::FRESH_MAX) { $etat = 'à jour'; }
+                    else { $etat = 'périmé : lien de repli affiché'; }
+                    $cle   = self::suivi_state($e, $m, $jours);
+                    $d     = null;
+                    $ecart = '—';
+                    if (!empty($e['offer']) && !empty($m['ref'])) {
+                        $d     = ((float) $e['offer']['amount'] - (float) $m['ref']) / (float) $m['ref'] * 100;
+                        $ecart = ($d > 0 ? '+' : '') . (int) round($d) . ' %';
+                    }
+                    $liste = self::posts_for($a, $meta);
+                    foreach ($liste as $p) { $arts[(int) $p['id']] = self::short_title($p['title']); }
+                    $comptes[$cle]++;
+                    $lignes[] = [
+                        'a' => $a, 'e' => $e, 'm' => $m, 'cle' => $cle, 'etat' => $etat, 'd' => $d, 'ecart' => $ecart,
+                        'hors' => $d !== null && abs($d) >= $seuil, 'nom' => self::product_name($a, $meta), 'liste' => $liste,
+                    ];
+                }
+                // Par défaut : les problèmes d'abord, puis les produits à surveiller.
+                usort($lignes, function ($x, $y) use ($rang) {
+                    return [$rang[$x['cle']], strtolower($x['nom'] !== '' ? $x['nom'] : $x['a'])] <=> [$rang[$y['cle']], strtolower($y['nom'] !== '' ? $y['nom'] : $y['a'])];
+                });
+                asort($arts);
+                ?>
                 <style>
+                    .mcm-bar { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 0 0 10px; max-width: 1100px; }
+                    .mcm-bar .button.is-on { background: #2271b1; border-color: #2271b1; color: #fff; }
+                    .mcm-bar .mcm-n { opacity: .75; margin-left: 2px; }
+                    .mcm-bar .mcm-info { margin-left: auto; color: #646970; }
+                    .mcm-prix-suivis th[data-col] { cursor: pointer; white-space: nowrap; }
+                    .mcm-prix-suivis th[data-col]::after { content: ' \2195'; opacity: .35; }
+                    .mcm-prix-suivis th[aria-sort="ascending"]::after { content: ' \25B2'; opacity: 1; }
+                    .mcm-prix-suivis th[aria-sort="descending"]::after { content: ' \25BC'; opacity: 1; }
+                    .mcm-prix-suivis tr.mcm-e-problem td:first-child { box-shadow: inset 4px 0 0 #d63638; }
+                    .mcm-prix-suivis tr.mcm-e-watch td:first-child { box-shadow: inset 4px 0 0 #dba617; }
+                    .mcm-prix-suivis tr.mcm-e-ok td:first-child { box-shadow: inset 4px 0 0 #00a32a; }
+                    .mcm-prix-suivis tr.mcm-e-new td:first-child { box-shadow: inset 4px 0 0 #a7aaad; }
+                    .mcm-pill { display: inline-block; padding: 1px 8px 1px 4px; border-radius: 10px; white-space: nowrap; }
+                    .mcm-pill .dashicons { font-size: 16px; width: 16px; height: 16px; vertical-align: text-bottom; }
+                    .mcm-p-problem { background: #fcf0f1; color: #8a1f21; }
+                    .mcm-p-watch { background: #fcf9e8; color: #6e4e00; }
+                    .mcm-p-ok { background: #edfaef; color: #0a5b1e; }
+                    .mcm-p-new { background: #f0f0f1; color: #50575e; }
+                    .mcm-ecart-hors { background: #fcf0d4; color: #8a4b00; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
                     .mcm-prix-suivis td.mcm-nom, .mcm-prix-suivis td.mcm-art { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
                     .mcm-prix-suivis td.mcm-art a { text-decoration: none; }
                     .mcm-prix-suivis td.mcm-art .dashicons { font-size: 14px; width: 14px; height: 14px; vertical-align: middle; }
@@ -1259,36 +1336,38 @@ final class MCM_Prix
                     .mcm-prix-suivis td.mcm-art summary { display: inline; cursor: pointer; color: #2271b1; }
                     .mcm-prix-suivis td.mcm-art details[open] { display: block; white-space: normal; }
                 </style>
-                <table class="widefat striped mcm-prix-suivis" style="max-width:1100px">
-                    <thead><tr><th>Produit</th><th>ASIN</th><th>Prix</th><th>Référence</th><th>Écart</th><th>Relevé</th><th>État</th><th>Articles</th></tr></thead>
+                <div class="mcm-bar" id="mcm-bar">
+                    <button type="button" class="button is-on" data-f="all">Tous <span class="mcm-n">(<?php echo (int) count($lignes); ?>)</span></button>
+                    <?php foreach (['problem', 'watch', 'ok', 'new'] as $k) : if ($k === 'new' && !$comptes[$k]) { continue; } ?>
+                        <button type="button" class="button" data-f="<?php echo esc_attr($k); ?>"><?php echo esc_html($labels[$k]); ?> <span class="mcm-n">(<?php echo (int) $comptes[$k]; ?>)</span></button>
+                    <?php endforeach; ?>
+                    <select id="mcm-art" aria-label="Filtrer par article">
+                        <option value="">Tous les articles</option>
+                        <?php foreach ($arts as $id => $t) : ?><option value="<?php echo (int) $id; ?>"><?php echo esc_html($t); ?></option><?php endforeach; ?>
+                    </select>
+                    <input type="search" id="mcm-q" placeholder="Produit ou ASIN" aria-label="Rechercher un produit">
+                    <span class="mcm-info" id="mcm-info" aria-live="polite"></span>
+                </div>
+                <table class="widefat striped mcm-prix-suivis" id="mcm-tab" style="max-width:1100px">
+                    <thead><tr><th data-col="nom" data-t="s">Produit</th><th data-col="asin" data-t="s">ASIN</th><th data-col="prix" data-t="n">Prix</th><th data-col="ref" data-t="n">Référence</th><th data-col="ecart" data-t="n">Écart</th><th data-col="ts" data-t="n">Relevé</th><th data-col="etat" data-t="n">État</th><th>Articles</th></tr></thead>
                     <tbody>
-                    <?php foreach (array_keys($asins) as $a) :
-                        $e   = $cache[$a] ?? [];
-                        $m   = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
-                        $age = !empty($e['ts']) ? time() - (int) $e['ts'] : null;
-                        if ($age === null) { $etat = 'pas encore relevé'; }
-                        elseif (empty($e['offer'])) {
-                            $etat = 'pas d\'offre' . (!empty($e['err']) ? ' (' . $e['err'] . ')' : '');
-                            if (!empty($m['missing_since'])) { $etat .= ' depuis ' . human_time_diff((int) $m['missing_since']); }
-                        }
-                        elseif ($age < self::FRESH_MAX) { $etat = 'à jour'; }
-                        else { $etat = 'périmé : lien de repli affiché'; }
-                        $ecart = '—';
-                        if (!empty($e['offer']) && !empty($m['ref'])) {
-                            $d     = ((float) $e['offer']['amount'] - (float) $m['ref']) / (float) $m['ref'] * 100;
-                            $ecart = ($d > 0 ? '+' : '') . (int) round($d) . ' %';
-                        }
-                        $nom = self::product_name($a, $meta);
+                    <?php foreach ($lignes as $r) :
+                        $a = $r['a']; $e = $r['e']; $m = $r['m']; $cle = $r['cle'];
+                        $ids = ',' . implode(',', array_map(function ($p) { return (int) $p['id']; }, $r['liste'])) . ',';
                         ?>
-                        <tr><td class="mcm-nom"<?php echo $nom !== '' ? ' title="' . esc_attr($nom) . '"' : ''; ?>><?php echo $nom !== '' ? esc_html($nom) : '—'; ?></td>
-                            <td><?php echo esc_html($a); ?></td>
-                            <td><?php echo !empty($e['offer']) ? esc_html($e['offer']['display']) : '—'; ?></td>
-                            <td><?php echo !empty($m['ref']) ? esc_html(self::money($m['ref'])) : '—'; ?></td>
-                            <td><?php echo esc_html($ecart); ?></td>
-                            <td><?php echo $fmt($e['ts'] ?? 0); ?></td>
-                            <td><?php echo esc_html($etat); ?></td>
+                        <tr class="mcm-r mcm-e-<?php echo esc_attr($cle); ?>" data-etat="<?php echo esc_attr($cle); ?>" data-arts="<?php echo esc_attr($ids); ?>" data-q="<?php echo esc_attr(strtolower($r['nom'] . ' ' . $a)); ?>">
+                            <td class="mcm-nom" data-v="<?php echo esc_attr(strtolower($r['nom'])); ?>"<?php echo $r['nom'] !== '' ? ' title="' . esc_attr($r['nom']) . '"' : ''; ?>><?php echo $r['nom'] !== '' ? esc_html($r['nom']) : '—'; ?></td>
+                            <td data-v="<?php echo esc_attr(strtolower($a)); ?>"><?php echo esc_html($a); ?></td>
+                            <td data-v="<?php echo !empty($e['offer']) ? esc_attr((string) (float) $e['offer']['amount']) : ''; ?>"><?php echo !empty($e['offer']) ? esc_html($e['offer']['display']) : '—'; ?></td>
+                            <td data-v="<?php echo !empty($m['ref']) ? esc_attr((string) (float) $m['ref']) : ''; ?>"><?php echo !empty($m['ref']) ? esc_html(self::money($m['ref'])) : '—'; ?></td>
+                            <td data-v="<?php echo $r['d'] !== null ? esc_attr((string) round($r['d'], 2)) : ''; ?>"><?php
+                                if ($r['hors']) { echo '<span class="mcm-ecart-hors" title="Écart supérieur ou égal au seuil de ' . (int) $seuil . ' %">' . esc_html($r['ecart']) . '</span>'; }
+                                else { echo esc_html($r['ecart']); }
+                            ?></td>
+                            <td data-v="<?php echo (int) ($e['ts'] ?? 0) ?: ''; ?>"><?php echo $fmt($e['ts'] ?? 0); ?></td>
+                            <td data-v="<?php echo (int) $rang[$cle]; ?>"><span class="mcm-pill mcm-p-<?php echo esc_attr($cle); ?>" title="<?php echo esc_attr($labels[$cle]); ?>"><span class="dashicons dashicons-<?php echo esc_attr($icones[$cle]); ?>"></span> <?php echo esc_html($r['etat']); ?></span></td>
                             <td class="mcm-art"><?php
-                                $liste = self::posts_for($a, $meta);
+                                $liste = $r['liste'];
                                 $ligne = function ($p) {
                                     return '<a href="' . esc_url($p['url']) . '" title="' . esc_attr($p['title']) . '">' . esc_html(self::short_title($p['title'])) . '</a> '
                                         . '<a href="' . esc_url($p['view']) . '" target="_blank" rel="noopener" title="Voir l\'article en ligne"><span class="dashicons dashicons-external"></span></a>';
@@ -1303,6 +1382,53 @@ final class MCM_Prix
                     <?php endforeach; ?>
                     </tbody>
                 </table>
+                <script>
+                (function () {
+                    var tab = document.getElementById('mcm-tab'), bar = document.getElementById('mcm-bar');
+                    if (!tab || !bar) { return; }
+                    var body = tab.tBodies[0], rows = Array.prototype.slice.call(body.rows);
+                    var sel = document.getElementById('mcm-art'), q = document.getElementById('mcm-q'), info = document.getElementById('mcm-info');
+                    var etat = 'all';
+                    function apply() {
+                        var term = q.value.toLowerCase().trim(), art = sel.value, n = 0;
+                        rows.forEach(function (r) {
+                            var ok = (etat === 'all' || r.getAttribute('data-etat') === etat)
+                                && (!art || r.getAttribute('data-arts').indexOf(',' + art + ',') !== -1)
+                                && (!term || r.getAttribute('data-q').indexOf(term) !== -1);
+                            r.style.display = ok ? '' : 'none';
+                            if (ok) { n++; }
+                        });
+                        info.textContent = n + ' produit' + (n > 1 ? 's' : '') + ' affiché' + (n > 1 ? 's' : '') + ' sur ' + rows.length;
+                    }
+                    bar.addEventListener('click', function (ev) {
+                        var b = ev.target.closest ? ev.target.closest('button[data-f]') : null;
+                        if (!b) { return; }
+                        etat = b.getAttribute('data-f');
+                        Array.prototype.forEach.call(bar.querySelectorAll('button[data-f]'), function (x) { x.classList.toggle('is-on', x === b); });
+                        apply();
+                    });
+                    sel.addEventListener('change', apply);
+                    q.addEventListener('input', apply);
+                    Array.prototype.forEach.call(tab.tHead.rows[0].cells, function (th, i) {
+                        if (!th.hasAttribute('data-col')) { return; }
+                        th.addEventListener('click', function () {
+                            var asc = th.getAttribute('aria-sort') !== 'ascending', num = th.getAttribute('data-t') === 'n';
+                            Array.prototype.forEach.call(tab.tHead.rows[0].cells, function (x) { x.removeAttribute('aria-sort'); });
+                            th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+                            rows.sort(function (x, y) {
+                                var a = x.cells[i].getAttribute('data-v'), b = y.cells[i].getAttribute('data-v');
+                                if (a === '' && b === '') { return 0; }
+                                if (a === '') { return 1; }
+                                if (b === '') { return -1; }
+                                var c = num ? parseFloat(a) - parseFloat(b) : (a < b ? -1 : (a > b ? 1 : 0));
+                                return asc ? c : -c;
+                            });
+                            rows.forEach(function (r) { body.appendChild(r); });
+                        });
+                    });
+                    apply();
+                })();
+                </script>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px">
                     <input type="hidden" name="action" value="mcm_prix_setref">
                     <?php echo $nonce('mcm_prix_setref'); ?>

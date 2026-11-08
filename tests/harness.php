@@ -334,8 +334,30 @@ check('titre coupé au premier « : »', $tit->invoke(null, 'Meilleur grille-pai
 check('titre sans « : » tronqué à 50 caractères', mb_strlen($tit->invoke(null, str_repeat('abcdefghij ', 8))) <= 50 && substr($tit->invoke(null, str_repeat('abcdefghij ', 8)), -3) === '…');
 check('titre court conservé tel quel', $tit->invoke(null, 'Titre 42') === 'Titre 42');
 ob_start(); MCM_Prix::render_admin(); $page2 = ob_get_clean();
-check('tableau : colonne Produit avec le nom', strpos($page2, '<th>Produit</th>') !== false && strpos($page2, 'Bosch MUM Série 2 MUMS2EB01') !== false);
+check('tableau : colonne Produit avec le nom', strpos($page2, '>Produit</th>') !== false && strpos($page2, 'Bosch MUM Série 2 MUMS2EB01') !== false);
 check('tableau : lien d\'édition et lien vers l\'article en ligne', strpos($page2, 'post=42') !== false && strpos($page2, 'https://example.test/?p=42') !== false);
+
+// --- 10. Tableau « Prix suivis » : états, couleurs, filtres, tri (v1.2.1) ----------------------
+$ss = $ref->getMethod('suivi_state');
+$now = time();
+check('état : pas encore relevé', MCM_Prix::suivi_state([], [], 3) === 'new');
+check('état : offre récente = à jour', MCM_Prix::suivi_state(['ts' => $now, 'offer' => ['amount' => 10]], [], 3) === 'ok');
+check('état : offre périmée = à surveiller', MCM_Prix::suivi_state(['ts' => $now - 7200, 'offer' => ['amount' => 10]], [], 3) === 'watch');
+check('état : sans offre depuis peu = à surveiller', MCM_Prix::suivi_state(['ts' => $now], ['missing_since' => $now - 3600], 3) === 'watch');
+check('état : sans offre depuis 3 jours = problème', MCM_Prix::suivi_state(['ts' => $now], ['missing_since' => $now - 4 * 86400], 3) === 'problem');
+check('état : erreur API (ItemNotAccessible) = problème', MCM_Prix::suivi_state(['ts' => $now, 'err' => 'ItemNotAccessible'], [], 3) === 'problem');
+check('état : un gros écart de prix reste « à jour »', MCM_Prix::suivi_state(['ts' => $now, 'offer' => ['amount' => 379.99]], ['ref' => 100.0], 3) === 'ok');
+$meta = (array) get_option('mcm_prix_meta'); $meta['B0GHN39ZGJ']['ref'] = 200.0; update_option('mcm_prix_meta', $meta);
+$c = get_option('mcm_prix_cache'); $c['B0GHN39ZGJ']['ts'] = time(); update_option('mcm_prix_cache', $c);
+ob_start(); MCM_Prix::render_admin(); $page3 = ob_get_clean();
+check('tableau : cellule Écart colorée si écart >= seuil', strpos($page3, 'mcm-ecart-hors') !== false && strpos($page3, '+90 %') !== false);
+check('tableau : la ligne à gros écart reste verte', (bool) preg_match('/mcm-e-ok[^>]*data-q="[^"]*b0ghn39zgj/i', $page3));
+check('tableau : ligne rouge pour le produit sans offre depuis 5 jours', (bool) preg_match('/mcm-e-problem[^>]*data-q="[^"]*b0gqvbwmn8/i', $page3));
+check('tableau : problèmes affichés avant les produits à jour', strpos($page3, 'mcm-e-problem') < strpos($page3, 'mcm-e-ok'));
+check('tableau : pastilles de filtre avec compteurs', strpos($page3, 'data-f="problem"') !== false && strpos($page3, 'data-f="ok"') !== false && strpos($page3, 'data-f="all"') !== false);
+check('tableau : filtre par article et recherche', strpos($page3, 'id="mcm-art"') !== false && strpos($page3, 'value="42"') !== false && strpos($page3, 'id="mcm-q"') !== false);
+check('tableau : en-têtes triables', substr_count($page3, 'data-col=') >= 7);
+if (getenv('DUMP_PAGE')) { file_put_contents(getenv('DUMP_PAGE'), $page3); }
 
 echo "\n" . ($fail === 0 ? "TOUS LES TESTS PASSENT" : "$fail ÉCHEC(S)") . "\n";
 exit($fail === 0 ? 0 : 1);

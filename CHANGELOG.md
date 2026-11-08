@@ -1,5 +1,9 @@
 # Journal des versions
 
+## 1.2.1
+- Tableau « Prix suivis » : code couleur par état (vert à jour, orange à surveiller, rouge problème, gris pas encore relevé), pastilles de filtre avec compteurs, filtre par article, recherche par produit ou ASIN, tri par clic sur les en-têtes. Les problèmes s'affichent en premier.
+- La cellule « Écart » est colorée quand l'écart atteint le seuil réglé ; l'état de la ligne n'en dépend pas.
+
 ## 1.2.0
 - Tableau « Prix suivis » : nouvelle colonne « Produit » (nom lu dans l'image du lien Amazon de l'article), titres d'articles raccourcis (coupés au premier « : »), lien vers l'éditeur et lien vers l'article en ligne, « +N autres » quand un produit est dans plus de 2 articles.
 
