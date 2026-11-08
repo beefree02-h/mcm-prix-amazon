@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.1.1
+- Version de contrôle du mécanisme de mise à jour automatique (aucun changement fonctionnel).
+
 ## 1.1.0
 - Mises à jour automatiques depuis GitHub, avec contrôle d'empreinte SHA-256 avant installation.
 - Textes réglables : texte de repli (« Voir l’offre » par défaut), libellé du lien d'avis, avis en bas de page.
