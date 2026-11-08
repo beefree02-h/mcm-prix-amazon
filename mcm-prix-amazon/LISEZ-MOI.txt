@@ -1,8 +1,9 @@
-PRIX AMAZON CREATORS — mode d'emploi
-=====================================
+PRIX AMAZON CREATORS — mode d'emploi (version 1.1)
+===================================================
 
-1. INSTALLATION (à refaire sur chacun des 6 sites)
+1. INSTALLATION (une seule fois par site, à la main)
    Extensions > Ajouter > Téléverser une extension > choisir mcm-prix-amazon.zip > Activer.
+   Ensuite, les nouvelles versions s'installent toutes seules (voir point 7).
 
 2. RÉGLAGES  (Réglages > Prix Amazon)
    - Identifiant client : celui d'Associates Central (amzn1.application-oa2-client....)
@@ -12,9 +13,11 @@ PRIX AMAZON CREATORS — mode d'emploi
    - Boutique           : www.amazon.fr
    Les mêmes identifiants/secret servent pour les 6 sites, seul le tag change.
 
-   Option plus sûre pour le secret : le mettre dans wp-config.php au lieu de la base de données :
+   Option plus sûre : mettre les identifiants dans wp-config.php au lieu de la base de données :
+       define('MCM_PRIX_CLIENT_ID', 'amzn1.application-oa2-client....');
        define('MCM_PRIX_CLIENT_SECRET', 'le-secret');
-   (idem MCM_PRIX_CLIENT_ID et MCM_PRIX_PARTNER_TAG si souhaité)
+       define('MCM_PRIX_PARTNER_TAG', 'monsite-21');
+   (Un changement de secret se fait alors dans wp-config.php de chaque site.)
 
 3. TESTER
    Réglages > Prix Amazon > « Tester » avec un ASIN. Message attendu : « Connexion OK ».
@@ -25,24 +28,40 @@ PRIX AMAZON CREATORS — mode d'emploi
        [prix asin="B0GHN39ZGJ"]
    Remplace un prix écrit à la main. Les ASIN sont enregistrés automatiquement.
    Options :
-       lien="0"         le prix n'est pas cliquable (à réserver aux cas où un lien « Voir l’offre »
-                        se trouve juste à côté)
+       lien="0"         le prix n'est pas cliquable
        horodatage="0"   masque l'heure du relevé dans CE shortcode (à réserver aux cas où le même
                         prix est déjà horodaté juste à côté ; l'avis en bas de page reste affiché)
 
 5. CE QUE FAIT LE PLUGIN
    - Toutes les 30 minutes, il interroge l'API (10 ASIN par requête, 1 requête/seconde).
    - Un prix relevé il y a moins de 55 minutes est affiché avec l'heure du relevé et un lien
-     « Précisions » vers l'avis légal en bas de page.
+     vers l'avis légal en bas de page.
    - Au-delà, ou si l'API est en panne, ou si le produit n'a pas d'offre : le texte devient
-     « Voir l’offre » (lien affilié). Rien à faire.
-   - Si les prix ne sont plus actualisés depuis plus de 3 h : e-mail à l'administrateur (1 par jour
-     maximum) et bandeau rouge dans l'administration.
+     « Voir l'offre » (lien affilié ; texte modifiable dans les réglages). Rien à faire.
+   - Si les prix ne sont plus actualisés depuis plus de 3 h : e-mail (1 par jour maximum) et
+     bandeau rouge dans l'administration.
 
-6. À SAVOIR
-   - WP-Cron ne tourne que lorsque le site reçoit des visites. Sur un site peu fréquenté, ajoutez
-     dans wp-config.php  define('DISABLE_WP_CRON', true);  puis une tâche planifiée du
-     serveur toutes les 15 min qui appelle  https://votresite.fr/wp-cron.php?doing_wp_cron
+6. SURVEILLANCE
+   - Produits sans offre : un produit qui n'a plus d'offre depuis N jours (3 par défaut) apparaît
+     dans le bloc « À surveiller » de la page de réglages, avec les articles concernés.
+   - Écart de prix : un prix qui s'éloigne de plus de 30 % (réglable) du premier prix relevé est
+     signalé : c'est le signal pour relire le texte de l'article (« le moins cher », fourchettes…).
+     Après relecture, « Prendre les prix actuels comme références » remet les écarts à zéro.
+   - E-mail de synthèse chaque lundi, seulement s'il y a quelque chose à signaler.
+   - Santé : dernier relevé, prochain passage du cron (alerte s'il est en retard), requêtes API du
+     jour sur le quota initial de 8 640 (partagé par tous vos sites).
+   - Sur un site peu fréquenté, WP-Cron peut prendre du retard : ajoutez dans wp-config.php
+         define('DISABLE_WP_CRON', true);
+     puis une tâche planifiée du serveur toutes les 15 min qui appelle
+         https://votresite.fr/wp-cron.php?doing_wp_cron
+
+7. MISES À JOUR AUTOMATIQUES
+   Le plugin vérifie le dépôt GitHub (github.com/beefree02-h/mcm-prix-amazon) et installe les
+   nouvelles versions tout seul (option modifiable). Le paquet est contrôlé par empreinte SHA-256
+   avant installation. « Vérifier les mises à jour » force la vérification. Aucun identifiant ne
+   quitte le site.
+
+8. À SAVOIR
    - Pages en cache : un prix périmé dans une page en cache bascule quand même sur le lien
      côté navigateur. L'option « Vider le cache de pages » est facultative.
    - Ne sont pas gérés par l'API : notes et nombres d'avis (à garder manuels), phrases du type

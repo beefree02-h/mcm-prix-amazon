@@ -1,0 +1,324 @@
+<?php
+// Banc d'essai : simule le strict minimum de WordPress pour tester la logique du plugin.
+define('ABSPATH', '/');
+define('HOUR_IN_SECONDS', 3600);
+define('DAY_IN_SECONDS', 86400);
+define('MINUTE_IN_SECONDS', 60);
+
+$GLOBALS['__opts'] = ['admin_email' => 'admin@example.test'];
+$GLOBALS['__http_get'] = [];
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http'] = [];     // file de réponses simulées
+$GLOBALS['__calls'] = [];    // appels HTTP enregistrés
+
+class WP_Error {
+    public $code; public $msg;
+    function __construct($c, $m) { $this->code = $c; $this->msg = $m; }
+    function get_error_message() { return $this->msg; }
+}
+function is_wp_error($x) { return $x instanceof WP_Error; }
+function add_action(...$a) {} function add_shortcode(...$a) {}
+function add_filter($tag, $cb, $prio = 10, $n = 1) { $GLOBALS['__filters'][$tag][] = $cb; }
+function register_activation_hook(...$a) {} function register_deactivation_hook(...$a) {}
+function is_admin() { return false; }
+function get_option($k, $d = false) { return $GLOBALS['__opts'][$k] ?? $d; }
+function update_option($k, $v, $a = null) { $GLOBALS['__opts'][$k] = $v; return true; }
+function get_transient($k) { return $GLOBALS['__trans'][$k] ?? false; }
+function set_transient($k, $v, $t = 0) { $GLOBALS['__trans'][$k] = $v; return true; }
+function delete_transient($k) { unset($GLOBALS['__trans'][$k]); return true; }
+function wp_json_encode($v) { return json_encode($v); }
+function esc_html($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
+function esc_attr($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
+function esc_url($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
+function wp_date($f, $t = null) { $t = $t ?? time(); $d = new DateTime('@' . $t); $d->setTimezone(new DateTimeZone('Europe/Paris')); return $d->format($f); }
+function shortcode_atts($d, $a, $s = '') { return array_merge($d, array_intersect_key((array) $a, $d)); }
+function current_user_can($c) { return true; }
+function wp_next_scheduled($h) { return false; } function wp_schedule_event(...$a) {}
+function wp_remote_post($url, $args) {
+    $GLOBALS['__calls'][] = ['url' => $url, 'args' => $args];
+    $r = array_shift($GLOBALS['__http']);
+    return $r ?? new WP_Error('none', 'pas de réponse simulée');
+}
+function wp_remote_retrieve_response_code($r) { return $r['code']; }
+function wp_remote_retrieve_body($r) { return $r['body']; }
+function is_email($e) { return (bool) filter_var($e, FILTER_VALIDATE_EMAIL) ? $e : false; }
+function sanitize_text_field($s) { return trim(strip_tags((string) $s)); }
+function sanitize_textarea_field($s) { return trim(strip_tags((string) $s)); }
+function sanitize_email($s) { return trim((string) $s); }
+function esc_textarea($s) { return htmlspecialchars((string) $s); }
+function human_time_diff($a, $b = 0) { $b = $b ?: time(); return round(abs($b - $a) / 86400) . ' jours'; }
+function wp_is_post_revision($id) { return false; }
+function get_post($id) { return (object) ['ID' => $id, 'post_status' => 'publish']; }
+function get_the_title($p) { return 'Titre ' . $p->ID; }
+function get_edit_post_link($id, $ctx = '') { return "https://example.test/wp-admin/post.php?post=$id&action=edit"; }
+function plugin_basename($f) { return 'mcm-prix-amazon/mcm-prix-amazon.php'; }
+function delete_site_transient($k) { return true; }
+function wp_remote_get($url, $args = []) { $GLOBALS['__calls'][] = ['url' => $url, 'args' => $args]; $r = array_shift($GLOBALS['__http_get']); return $r ?? new WP_Error('none', 'pas de réponse simulée'); }
+function download_url($url, $t = 300) { return $GLOBALS['__dl'] ?? new WP_Error('dl', 'échec téléchargement'); }
+
+function do_action(...$a) {}
+function wp_mail(...$a) { $GLOBALS['__mail'] = $a; return true; }
+function get_bloginfo($k) { return 'Mon Choix Malin'; }
+function wp_specialchars_decode($s, $q = 0) { return $s; }
+function admin_url($p = '') { return 'https://example.test/wp-admin/' . $p; }
+
+require getenv('PLUGIN_FILE');
+
+$fail = 0;
+function check($label, $cond) {
+    global $fail;
+    echo ($cond ? "OK   " : "FAIL ") . $label . "\n";
+    if (!$cond) $fail++;
+}
+
+// --- 1. Parsing : les deux noms de conteneur de la documentation -------------------------
+$item = fn($asin) => [
+    'asin' => $asin,
+    'detailPageURL' => "https://www.amazon.fr/dp/$asin?tag=monchoixmalinfr-21&linkCode=ogi&th=1&psc=1",
+    'offersV2' => ['listings' => [[
+        'availability' => ['type' => 'IN_STOCK', 'maxOrderQuantity' => 5, 'minOrderQuantity' => 1],
+        'condition' => ['value' => 'New'],
+        'isBuyBoxWinner' => true,
+        'price' => ['money' => ['amount' => 379.99, 'currency' => 'EUR', 'displayAmount' => '379,99 €']],
+    ]]],
+];
+foreach (['itemResults', 'itemsResult'] as $container) {
+    $r = MCM_Prix::parse_response([$container => ['items' => [$item('B0GHN39ZGJ')]]], ['B0GHN39ZGJ']);
+    check("parse ($container) : prix 379,99", ($r['offers']['B0GHN39ZGJ']['display'] ?? '') === '379,99 €');
+}
+
+// --- 2. Erreurs partielles + hors stock + occasion --------------------------------------
+$oos = $item('B0GQVBWMN8'); $oos['offersV2']['listings'][0]['availability']['type'] = 'OUT_OF_STOCK';
+$used = $item('B0GXWTLMJT'); $used['offersV2']['listings'][0]['condition']['value'] = 'Used';
+$noOffer = ['asin' => 'B0GD6Z2YG2'];
+$data = [
+    'errors' => [['code' => 'ItemNotAccessible', 'message' => 'The ItemId B01180YUXS is not accessible through the Creators API.']],
+    'itemResults' => ['items' => [$oos, $used, $noOffer]],
+];
+$asins = ['B0GQVBWMN8', 'B0GXWTLMJT', 'B0GD6Z2YG2', 'B01180YUXS'];
+$r = MCM_Prix::parse_response($data, $asins);
+check('hors stock => pas de prix', $r['offers']['B0GQVBWMN8'] === null);
+check('occasion => pas de prix', $r['offers']['B0GXWTLMJT'] === null);
+check('item sans offersV2 => pas de prix', $r['offers']['B0GD6Z2YG2'] === null);
+check('ASIN en erreur repéré', ($r['errors']['B01180YUXS'] ?? '') === 'ItemNotAccessible');
+check('ASIN absent de la réponse => null', array_key_exists('B01180YUXS', $r['offers']) && $r['offers']['B01180YUXS'] === null);
+
+// --- 3. Cycle complet : réglages, jeton, requête, cache, rendu ---------------------------
+update_option('mcm_prix_settings', ['client_id' => 'amzn1.application-oa2-client.TEST', 'client_secret' => 'SECRET_TEST', 'partner_tag' => 'monchoixmalinfr-21', 'marketplace' => 'www.amazon.fr', 'version' => '3.2', 'purge_cache' => '0']);
+
+// rendu avant tout relevé => bouton de repli
+$html = MCM_Prix::shortcode(['asin' => 'B0GHN39ZGJ']);
+check('avant relevé : bouton « Voir l’offre »', strpos($html, 'Voir l’offre') !== false && strpos($html, '379') === false);
+check('repli : lien standard avec le tag', strpos($html, 'amazon.fr/dp/B0GHN39ZGJ?tag=monchoixmalinfr-21') !== false);
+check('ASIN enregistré automatiquement', isset(get_option('mcm_prix_asins')['B0GHN39ZGJ']));
+
+// ajoute un 2e ASIN, puis actualisation avec jeton + GetItems simulés
+MCM_Prix::shortcode(['asin' => 'B0GQVBWMN8']);
+$GLOBALS['__http'] = [
+    ['code' => 200, 'body' => json_encode(['access_token' => 'TOK', 'expires_in' => 3600])],
+    ['code' => 200, 'body' => json_encode(['itemResults' => ['items' => [$item('B0GHN39ZGJ'), $oos]]])],
+];
+MCM_Prix::refresh_all();
+$calls = $GLOBALS['__calls'];
+check('1er appel = jeton sur api.amazon.co.uk (version 3.2)', $calls[0]['url'] === 'https://api.amazon.co.uk/auth/o2/token');
+$tok = json_decode($calls[0]['args']['body'], true);
+check('jeton : scope creatorsapi::default + client_credentials', $tok['scope'] === 'creatorsapi::default' && $tok['grant_type'] === 'client_credentials');
+check('2e appel = getItems sur creatorsapi.amazon', $calls[1]['url'] === 'https://creatorsapi.amazon/catalog/v1/getItems');
+check('en-tête Bearer sans suffixe Version', $calls[1]['args']['headers']['Authorization'] === 'Bearer TOK');
+check('en-tête x-marketplace', $calls[1]['args']['headers']['x-marketplace'] === 'www.amazon.fr');
+$body = json_decode($calls[1]['args']['body'], true);
+check('corps : partnerTag + 2 ASIN + resources offersV2', $body['partnerTag'] === 'monchoixmalinfr-21' && count($body['itemIds']) === 2 && in_array('offersV2.listings.price', $body['resources'], true));
+
+$html = MCM_Prix::shortcode(['asin' => 'B0GHN39ZGJ']);
+check('après relevé : prix 379,99 € affiché', strpos($html, '379,99 €') !== false);
+check('prix lié au lien fourni par l\'API (non modifié)', strpos($html, 'linkCode=ogi') !== false);
+check('horodatage + « Précisions » présents', strpos($html, 'Précisions') !== false && preg_match('#\(au \d{2}/\d{2}/\d{4} à \d{2}h\d{2}#u', $html) === 1);
+check('data-exp = relevé + 1 h', preg_match('/data-exp="(\d+)"/', $html, $m) && abs($m[1] - (time() + 3600)) < 5);
+$html2 = MCM_Prix::shortcode(['asin' => 'B0GQVBWMN8']);
+check('hors stock => bouton, pas de prix', strpos($html2, 'Voir l’offre') !== false);
+
+// ASIN périmé (relevé il y a 61 min) => bouton
+$c = get_option('mcm_prix_cache'); $c['B0GHN39ZGJ']['ts'] = time() - 3660; update_option('mcm_prix_cache', $c);
+$html = MCM_Prix::shortcode(['asin' => 'B0GHN39ZGJ']);
+check('relevé de 61 min => bouton (bascule automatique)', strpos($html, 'Voir l’offre') !== false && strpos($html, '379') === false);
+$c['B0GHN39ZGJ']['ts'] = time() - 3400; update_option('mcm_prix_cache', $c);   // 56 min : au-delà de la marge de 55 min
+$html = MCM_Prix::shortcode(['asin' => 'B0GHN39ZGJ']);
+check('relevé de 56 min => bouton (marge de sécurité de 5 min)', strpos($html, '379') === false);
+
+// ASIN invalide
+check('ASIN invalide => message éditeur', strpos(MCM_Prix::shortcode(['asin' => 'xx']), 'ASIN invalide') !== false);
+
+// --- 4. Pannes : le cache n'est pas rafraîchi, l'état d'erreur est enregistré ------------
+$ts_before = get_option('mcm_prix_cache')['B0GQVBWMN8']['ts'];
+$GLOBALS['__http'] = [['code' => 200, 'body' => json_encode(['access_token' => 'TOK', 'expires_in' => 3600])]]; // jeton déjà en cache => 1er appel = getItems
+$GLOBALS['__trans'] = []; // vide le jeton et le verrou
+$GLOBALS['__http'] = [
+    ['code' => 200, 'body' => json_encode(['access_token' => 'TOK2', 'expires_in' => 3600])],
+    ['code' => 429, 'body' => '{"message":"TooManyRequests"}'],
+];
+MCM_Prix::refresh_all();
+$st = get_option('mcm_prix_status');
+check('429 : erreur enregistrée', strpos($st['last_error'], '429') !== false);
+check('429 : le cache n\'est pas écrasé', get_option('mcm_prix_cache')['B0GQVBWMN8']['ts'] === $ts_before);
+
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http'] = [['code' => 400, 'body' => '{"error":"invalid_client"}']];
+MCM_Prix::refresh_all();
+$st = get_option('mcm_prix_status');
+check('identifiants refusés : message clair', strpos($st['last_error'], 'Authentification refusée') !== false && strpos($st['last_error'], 'invalid_client') !== false);
+check('le secret n\'apparaît dans aucun message d\'erreur', strpos($st['last_error'], 'SECRET_TEST') === false);
+
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http'] = [
+    ['code' => 200, 'body' => json_encode(['access_token' => 'TOK3', 'expires_in' => 3600])],
+    ['code' => 403, 'body' => '{"message":"AssociateNotEligible"}'],
+];
+MCM_Prix::refresh_all();
+check('AssociateNotEligible : message dédié', strpos(get_option('mcm_prix_status')['last_error'], '48 h') !== false);
+
+// --- 5. Alerte e-mail après > 3 h d'échec, une seule par 24 h ----------------------------
+$st = get_option('mcm_prix_status'); $st['last_ok'] = time() - 4 * 3600; unset($st['last_alert']); update_option('mcm_prix_status', $st);
+$GLOBALS['__trans'] = []; unset($GLOBALS['__mail']);
+$GLOBALS['__http'] = [['code' => 400, 'body' => '{"error":"invalid_client"}']];
+MCM_Prix::refresh_all();
+check('e-mail d\'alerte envoyé après 4 h sans succès', isset($GLOBALS['__mail']));
+unset($GLOBALS['__mail']); $GLOBALS['__trans'] = [];
+$GLOBALS['__http'] = [['code' => 400, 'body' => '{"error":"invalid_client"}']];
+MCM_Prix::refresh_all();
+check('pas de 2e e-mail dans les 24 h', !isset($GLOBALS['__mail']));
+
+// --- 6. Pied de page : avis + script ----------------------------------------------------
+ob_start(); MCM_Prix::footer(); $f = ob_get_clean();
+check('pied de page : script de bascule présent', strpos($f, 'data-exp') !== false);
+
+
+// --- 7. Suivi : référence, indisponibilité, écarts, articles ---------------------------
+$meta = get_option('mcm_prix_meta');
+check('prix de référence = premier prix relevé', abs(($meta['B0GHN39ZGJ']['ref'] ?? 0) - 379.99) < 0.001);
+check('produit sans offre : début d\'indisponibilité noté', !empty($meta['B0GQVBWMN8']['missing_since']));
+$rep = MCM_Prix::watch_report();
+check('sans offre depuis < 3 jours : pas encore signalé', empty($rep['missing']));
+$meta['B0GQVBWMN8']['missing_since'] = time() - 5 * 86400;
+update_option('mcm_prix_meta', $meta);
+$rep = MCM_Prix::watch_report();
+check('sans offre depuis 5 jours : signalé', isset($rep['missing']['B0GQVBWMN8']));
+check('prix stable : pas d\'écart signalé', empty($rep['dev']));
+// écart de prix : référence 200 € pour un prix actuel de 379,99 €
+$c = get_option('mcm_prix_cache'); $c['B0GHN39ZGJ']['ts'] = time(); update_option('mcm_prix_cache', $c);
+$meta['B0GHN39ZGJ']['ref'] = 200.0; update_option('mcm_prix_meta', $meta);
+$rep = MCM_Prix::watch_report();
+check('écart +90 % signalé', isset($rep['dev']['B0GHN39ZGJ']) && $rep['dev']['B0GHN39ZGJ']['pct'] > 89);
+$meta['B0GHN39ZGJ']['ref'] = 340.0; update_option('mcm_prix_meta', $meta);
+check('écart +12 % : sous le seuil de 30 %', empty(MCM_Prix::watch_report()['dev']));
+
+// articles liés à l'ASIN (enregistrement à la sauvegarde)
+MCM_Prix::on_save_post(42, (object) ['post_content' => 'Texte [prix asin="B0GQVBWMN8"] fin']);
+$rep = MCM_Prix::watch_report();
+check('article lié à l\'ASIN sans offre', ($rep['missing']['B0GQVBWMN8']['posts'][0]['title'] ?? '') === 'Titre 42' && strpos($rep['missing']['B0GQVBWMN8']['posts'][0]['url'], 'post=42') !== false);
+
+// --- 8. E-mail de synthèse ---------------------------------------------------------------
+unset($GLOBALS['__mail']);
+MCM_Prix::send_digest();
+check('synthèse envoyée (produit sans offre)', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'B0GQVBWMN8') !== false && strpos($GLOBALS['__mail'][2], 'Titre 42') !== false);
+check('synthèse : destinataire = administrateur par défaut', ($GLOBALS['__mail'][0] ?? '') === 'admin@example.test');
+$st = get_option('mcm_prix_settings'); $st['alert_email'] = 'alerte@example.test'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); MCM_Prix::send_digest();
+check('synthèse : adresse d\'alerte personnalisée', ($GLOBALS['__mail'][0] ?? '') === 'alerte@example.test');
+$st['digest'] = '0'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); MCM_Prix::send_digest();
+check('synthèse désactivée : aucun e-mail', !isset($GLOBALS['__mail']));
+$st['digest'] = '1'; update_option('mcm_prix_settings', $st);
+$meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = 0; update_option('mcm_prix_meta', $meta);
+unset($GLOBALS['__mail']); MCM_Prix::send_digest();
+check('rien à signaler : aucun e-mail', !isset($GLOBALS['__mail']));
+
+// --- 9. Textes réglables -----------------------------------------------------------------
+$st = get_option('mcm_prix_settings');
+$st['fallback_label'] = 'Consulter l’offre'; $st['details_label'] = 'Détails'; $st['legal_text'] = 'Avis perso sur {boutique}.';
+update_option('mcm_prix_settings', $st);
+$c = get_option('mcm_prix_cache'); $c['B0GHN39ZGJ']['ts'] = time(); update_option('mcm_prix_cache', $c);
+$h = MCM_Prix::shortcode(['asin' => 'B0GHN39ZGJ']);
+check('libellé d\'avis personnalisé', strpos($h, '– <a href="#mcm-prix-avis">Détails</a>') !== false);
+$h2 = MCM_Prix::shortcode(['asin' => 'B0GQVBWMN8']);
+check('texte de repli personnalisé', strpos($h2, 'Consulter l’offre') !== false && strpos($h2, 'Voir l’offre') === false);
+ob_start(); MCM_Prix::footer(); $f = ob_get_clean();
+check('avis légal personnalisé avec {boutique}', strpos($f, 'Avis perso sur Amazon.fr.') !== false);
+$st['legal_text'] = ''; update_option('mcm_prix_settings', $st);
+ob_start(); MCM_Prix::footer(); $f = ob_get_clean();
+$fd = html_entity_decode($f, ENT_QUOTES, 'UTF-8');
+check('avis légal vide : texte par défaut (Amazon.fr)', strpos($fd, 'sont exacts à la date et à l\'heure indiqués') !== false && strpos($fd, 'sur Amazon.fr au moment') !== false);
+
+// --- 10. Compteur de requêtes API --------------------------------------------------------
+$api = get_option('mcm_prix_api');
+check('compteur de requêtes API du jour > 0', ($api['n'] ?? 0) > 0 && $api['day'] === date('Y-m-d') || ($api['n'] ?? 0) > 0);
+check('429 mémorisé dans le compteur', ($api['last429'] ?? 0) > 0);
+
+// --- 11. Réglages : valeurs bornées ------------------------------------------------------
+$o = MCM_Prix::sanitize_settings(['alert_days' => 999, 'deviation_pct' => 1, 'alert_email' => 'pas-un-mail', 'fallback_label' => '  ', 'auto_update' => '1']);
+check('jours bornés à 30', $o['alert_days'] === '30');
+check('écart borné à 5 % minimum', $o['deviation_pct'] === '5');
+check('e-mail invalide ignoré', $o['alert_email'] === '');
+check('texte de repli vide => valeur par défaut', $o['fallback_label'] === 'Voir l’offre');
+check('case décochée => 0', $o['digest'] === '0' && $o['auto_update'] === '1');
+
+// --- 12. Mises à jour GitHub -------------------------------------------------------------
+$zip = tempnam(sys_get_temp_dir(), 'mcmzip'); file_put_contents($zip, 'contenu-du-zip');
+$hash = hash_file('sha256', $zip);
+$pkg  = 'https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-9.9.9.zip';
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode(['version' => '9.9.9', 'package' => $pkg, 'sha256' => $hash, 'changelog' => 'Test'])]];
+$t = MCM_Prix::check_update((object) ['response' => [], 'no_update' => []]);
+check('nouvelle version annoncée à WordPress', isset($t->response['mcm-prix-amazon/mcm-prix-amazon.php']) && $t->response['mcm-prix-amazon/mcm-prix-amazon.php']->new_version === '9.9.9');
+check('adresse du paquet transmise', $t->response['mcm-prix-amazon/mcm-prix-amazon.php']->package === $pkg);
+$GLOBALS['__dl'] = $zip;
+$r = MCM_Prix::verify_package(false, $pkg);
+check('empreinte correcte : paquet accepté', $r === $zip);
+file_put_contents($zip, 'contenu-altere');
+$r = MCM_Prix::verify_package(false, $pkg);
+check('empreinte différente : mise à jour refusée', is_wp_error($r) && strpos($r->get_error_message(), 'SHA-256') !== false);
+check('paquet inconnu du fichier d\'information : refusé', is_wp_error(MCM_Prix::verify_package(false, 'https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/autre.zip')));
+check('paquet d\'une autre origine : ignoré (traité par WordPress)', MCM_Prix::verify_package(false, 'https://example.com/x.zip') === false);
+// fichier d'information invalide ou hors dépôt
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode(['version' => '9.9.9', 'package' => 'https://evil.example/x.zip', 'sha256' => $hash])]];
+$t = MCM_Prix::check_update((object) ['response' => [], 'no_update' => []]);
+check('paquet hors du dépôt : aucune mise à jour proposée', empty($t->response));
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http_get'] = [['code' => 404, 'body' => 'Not found']];
+$t = MCM_Prix::check_update((object) ['response' => [], 'no_update' => []]);
+check('GitHub injoignable : aucune erreur, aucune mise à jour', empty($t->response));
+$GLOBALS['__trans'] = [];
+$GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode(['version' => '1.0.0', 'package' => $pkg, 'sha256' => $hash])]];
+$t = MCM_Prix::check_update((object) ['response' => [], 'no_update' => []]);
+check('version identique ou plus ancienne : pas de mise à jour', empty($t->response) && !empty($t->no_update));
+$st = get_option('mcm_prix_settings');
+$st['auto_update'] = '1'; update_option('mcm_prix_settings', $st);
+check('mise à jour automatique activée pour ce plugin', MCM_Prix::force_auto_update(false, (object) ['plugin' => 'mcm-prix-amazon/mcm-prix-amazon.php']) === true);
+check('autre plugin : décision de WordPress conservée', MCM_Prix::force_auto_update(false, (object) ['plugin' => 'autre/autre.php']) === false);
+$st['auto_update'] = '0'; update_option('mcm_prix_settings', $st);
+check('mise à jour automatique désactivée : décision conservée', MCM_Prix::force_auto_update(false, (object) ['plugin' => 'mcm-prix-amazon/mcm-prix-amazon.php']) === false);
+check('filtres de mise à jour enregistrés', !empty($GLOBALS['__filters']['pre_set_site_transient_update_plugins']) && !empty($GLOBALS['__filters']['upgrader_pre_download']) && !empty($GLOBALS['__filters']['auto_update_plugin']));
+
+
+// --- 13. Page de réglages : rendu sans erreur PHP ----------------------------------------
+function settings_fields($g) {}
+function submit_button($t, $type = '', $name = '', $wrap = true) { echo '<button>' . $t . '</button>'; }
+function selected($a, $b) { echo $a == $b ? 'selected' : ''; }
+function checked($a, $b) { echo $a == $b ? 'checked' : ''; }
+function wp_nonce_field($a, $n = '_wpnonce', $r = true, $e = true) { return '<input type="hidden" name="n">'; }
+$warnings = [];
+set_error_handler(function ($no, $str, $file, $line) use (&$warnings) { $warnings[] = "$str ($line)"; return true; });
+$meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = time() - 6 * 86400; $meta['B0GHN39ZGJ']['ref'] = 150.0; update_option('mcm_prix_meta', $meta);
+$GLOBALS['__trans']['mcm_prix_upd'] = ['info' => ['version' => '9.9.9'], 'checked' => time()];
+ob_start(); MCM_Prix::render_admin(); $page = ob_get_clean();
+restore_error_handler();
+check('page de réglages : aucun avertissement PHP', !$warnings);
+if ($warnings) { echo '   ' . implode(' | ', array_slice($warnings, 0, 5)) . "\n"; }
+check('page de réglages : bloc « À surveiller »', strpos($page, 'À surveiller') !== false && strpos($page, 'B0GQVBWMN8') !== false);
+check('page de réglages : sections Textes et Surveillance', strpos($page, 'Textes affichés') !== false && strpos($page, 'Surveillance et mises à jour') !== false);
+check('page de réglages : mise à jour 9.9.9 signalée', strpos($page, 'version 9.9.9') !== false);
+check('page de réglages : le secret n\'est jamais affiché', strpos($page, 'SECRET_TEST') === false);
+check('page de réglages : conseil de sécurité (secret en base)', strpos($page, 'Conseil de sécurité') !== false);
+
+echo "\n" . ($fail === 0 ? "TOUS LES TESTS PASSENT" : "$fail ÉCHEC(S)") . "\n";
+exit($fail === 0 ? 0 : 1);

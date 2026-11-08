@@ -1,11 +1,12 @@
 <?php
 /**
  * Plugin Name: Prix Amazon Creators
- * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers « Voir l’offre » si le prix n'est plus à jour.
- * Version: 1.0.1
+ * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
+ * Version: 1.1.0
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
+ * Update URI: https://github.com/beefree02-h/mcm-prix-amazon
  * Text Domain: mcm-prix
  */
 
@@ -15,19 +16,33 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
+    const VERSION      = '1.1.0';
+    const SLUG         = 'mcm-prix-amazon';
+
     const OPT_SETTINGS = 'mcm_prix_settings';
     const OPT_ASINS    = 'mcm_prix_asins';   // asin => timestamp d'enregistrement
     const OPT_CACHE    = 'mcm_prix_cache';   // asin => [ts, offer, url, err]
     const OPT_STATUS   = 'mcm_prix_status';
+    const OPT_META     = 'mcm_prix_meta';    // asin => [ref, ref_ts, missing_since, posts]
+    const OPT_API      = 'mcm_prix_api';     // compteur de requêtes du jour
     const CRON_HOOK    = 'mcm_prix_refresh';
+    const CRON_DIGEST  = 'mcm_prix_digest';
     const LOCK         = 'mcm_prix_lock';
+    const UPD_CACHE    = 'mcm_prix_upd';
 
     // Règle Amazon (doc Creators API, « Best Programming Practices ») : cache des offres 1 h maximum.
     const TTL       = 3600;
     // Marge de sécurité : un prix plus vieux que ça n'est plus affiché au rendu serveur.
     const FRESH_MAX = 3300;
 
-    const API_BASE = 'https://creatorsapi.amazon';
+    const API_BASE    = 'https://creatorsapi.amazon';
+    const DAILY_QUOTA = 8640;
+
+    // Mises à jour : fichier d'information et paquets publiés dans le dépôt GitHub.
+    const UPDATE_JSON    = 'https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/update.json';
+    const PACKAGE_PREFIX = 'https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/';
+
+    const LEGAL_DEFAULT = 'Les prix et la disponibilité du produit sont exacts à la date et à l\'heure indiqués et peuvent être modifiés. Les informations sur les prix et la disponibilité affichées sur {boutique} au moment de l\'achat s\'appliqueront à l\'achat de ce produit.';
 
     const TOKEN_ENDPOINTS = [
         '3.1' => 'https://api.amazon.com/auth/o2/token',
@@ -47,9 +62,16 @@ final class MCM_Prix
         add_shortcode('prix', [__CLASS__, 'shortcode']);
         add_filter('cron_schedules', [__CLASS__, 'cron_schedules']);
         add_action(self::CRON_HOOK, [__CLASS__, 'refresh_all']);
+        add_action(self::CRON_DIGEST, [__CLASS__, 'send_digest']);
         add_action('init', [__CLASS__, 'ensure_scheduled']);
         add_action('wp_footer', [__CLASS__, 'footer'], 50);
         add_action('save_post', [__CLASS__, 'on_save_post'], 10, 2);
+
+        // Mises à jour depuis GitHub
+        add_filter('pre_set_site_transient_update_plugins', [__CLASS__, 'check_update']);
+        add_filter('plugins_api', [__CLASS__, 'plugins_api'], 20, 3);
+        add_filter('upgrader_pre_download', [__CLASS__, 'verify_package'], 10, 3);
+        add_filter('auto_update_plugin', [__CLASS__, 'force_auto_update'], 10, 2);
 
         if (is_admin()) {
             add_action('admin_menu', [__CLASS__, 'admin_menu']);
@@ -58,19 +80,20 @@ final class MCM_Prix
             add_action('admin_post_mcm_prix_test', [__CLASS__, 'action_test']);
             add_action('admin_post_mcm_prix_refresh_now', [__CLASS__, 'action_refresh_now']);
             add_action('admin_post_mcm_prix_rescan', [__CLASS__, 'action_rescan']);
+            add_action('admin_post_mcm_prix_setref', [__CLASS__, 'action_setref']);
+            add_action('admin_post_mcm_prix_check_update', [__CLASS__, 'action_check_update']);
         }
     }
 
     public static function activate()
     {
-        if (!wp_next_scheduled(self::CRON_HOOK)) {
-            wp_schedule_event(time() + 60, 'mcm_prix_30min', self::CRON_HOOK);
-        }
+        self::ensure_scheduled();
     }
 
     public static function deactivate()
     {
         wp_clear_scheduled_hook(self::CRON_HOOK);
+        wp_clear_scheduled_hook(self::CRON_DIGEST);
     }
 
     public static function cron_schedules($schedules)
@@ -79,6 +102,10 @@ final class MCM_Prix
             'interval' => 1800,
             'display'  => 'Toutes les 30 minutes (Prix Amazon)',
         ];
+        $schedules['mcm_prix_weekly'] = [
+            'interval' => 7 * DAY_IN_SECONDS,
+            'display'  => 'Une fois par semaine (Prix Amazon)',
+        ];
         return $schedules;
     }
 
@@ -86,6 +113,9 @@ final class MCM_Prix
     {
         if (!wp_next_scheduled(self::CRON_HOOK)) {
             wp_schedule_event(time() + 60, 'mcm_prix_30min', self::CRON_HOOK);
+        }
+        if (!wp_next_scheduled(self::CRON_DIGEST)) {
+            wp_schedule_event(strtotime('next monday 07:00'), 'mcm_prix_weekly', self::CRON_DIGEST);
         }
     }
 
@@ -96,12 +126,20 @@ final class MCM_Prix
     private static function defaults()
     {
         return [
-            'client_id'     => '',
-            'client_secret' => '',
-            'partner_tag'   => '',
-            'marketplace'   => 'www.amazon.fr',
-            'version'       => '3.2',
-            'purge_cache'   => '0',
+            'client_id'      => '',
+            'client_secret'  => '',
+            'partner_tag'    => '',
+            'marketplace'    => 'www.amazon.fr',
+            'version'        => '3.2',
+            'purge_cache'    => '0',
+            'fallback_label' => 'Voir l’offre',
+            'details_label'  => 'Précisions',
+            'legal_text'     => '',
+            'auto_update'    => '1',
+            'digest'         => '1',
+            'alert_days'     => '3',
+            'deviation_pct'  => '30',
+            'alert_email'    => '',
         ];
     }
 
@@ -120,9 +158,52 @@ final class MCM_Prix
         return isset($s[$key]) ? (string) $s[$key] : '';
     }
 
+    private static function from_const($key)
+    {
+        $consts = [
+            'client_id'     => 'MCM_PRIX_CLIENT_ID',
+            'client_secret' => 'MCM_PRIX_CLIENT_SECRET',
+            'partner_tag'   => 'MCM_PRIX_PARTNER_TAG',
+        ];
+        return isset($consts[$key]) && defined($consts[$key]) && constant($consts[$key]) !== '';
+    }
+
     private static function configured()
     {
         return self::opt('client_id') !== '' && self::opt('client_secret') !== '' && self::opt('partner_tag') !== '';
+    }
+
+    private static function fallback_label()
+    {
+        $v = self::opt('fallback_label');
+        return $v !== '' ? $v : 'Voir l’offre';
+    }
+
+    private static function details_label()
+    {
+        $v = self::opt('details_label');
+        return $v !== '' ? $v : 'Précisions';
+    }
+
+    private static function boutique_label()
+    {
+        $m = self::opt('marketplace');
+        return $m === 'www.amazon.fr' ? 'Amazon.fr' : $m;
+    }
+
+    private static function legal_text()
+    {
+        $t = self::opt('legal_text');
+        if ($t === '') {
+            $t = self::LEGAL_DEFAULT;
+        }
+        return str_replace('{boutique}', self::boutique_label(), $t);
+    }
+
+    private static function alert_to()
+    {
+        $e = self::opt('alert_email');
+        return is_email($e) ? $e : get_option('admin_email');
     }
 
     /* ------------------------------------------------------------------ */
@@ -171,6 +252,21 @@ final class MCM_Prix
         return $data['access_token'];
     }
 
+    /** Compteur de requêtes GetItems du jour (quota initial : 8 640 par jour). */
+    private static function count_call($throttled = false)
+    {
+        $s   = (array) get_option(self::OPT_API, []);
+        $day = wp_date('Y-m-d');
+        if (($s['day'] ?? '') !== $day) {
+            $s = ['day' => $day, 'n' => 0, 'last429' => (int) ($s['last429'] ?? 0)];
+        }
+        $s['n'] = (int) ($s['n'] ?? 0) + 1;
+        if ($throttled) {
+            $s['last429'] = time();
+        }
+        update_option(self::OPT_API, $s, false);
+    }
+
     /**
      * Interroge GetItems pour 10 ASIN maximum.
      * Retourne ['offers' => [asin => offre|null], 'urls' => [asin => url], 'errors' => [asin => code]] ou WP_Error.
@@ -209,6 +305,7 @@ final class MCM_Prix
         $code    = (int) wp_remote_retrieve_response_code($r);
         $raw     = wp_remote_retrieve_body($r);
         $data    = json_decode($raw, true);
+        self::count_call($code === 429);
 
         if ($code === 200 && is_array($data)) {
             return self::parse_response($data, $asins);
@@ -315,6 +412,7 @@ final class MCM_Prix
         $start  = time();
         $asins  = array_keys((array) get_option(self::OPT_ASINS, []));
         $cache  = (array) get_option(self::OPT_CACHE, []);
+        $meta   = (array) get_option(self::OPT_META, []);
         $status = (array) get_option(self::OPT_STATUS, []);
 
         // les plus anciens d'abord : si on manque de temps, ils passent en premier au prochain tour
@@ -337,19 +435,35 @@ final class MCM_Prix
                 break;
             }
             foreach ($chunk as $asin) {
+                $offer = $res['offers'][$asin] ?? null;
                 $cache[$asin] = [
                     'ts'    => time(),
-                    'offer' => $res['offers'][$asin] ?? null,
+                    'offer' => $offer,
                     'url'   => $res['urls'][$asin] ?? ($cache[$asin]['url'] ?? ''),
                     'err'   => $res['errors'][$asin] ?? '',
                 ];
+                // suivi : prix de référence (premier prix relevé) et début de l'indisponibilité
+                $m = isset($meta[$asin]) && is_array($meta[$asin]) ? $meta[$asin] : [];
+                if ($offer) {
+                    $m['missing_since'] = 0;
+                    if (empty($m['ref'])) {
+                        $m['ref']    = (float) $offer['amount'];
+                        $m['ref_ts'] = time();
+                    }
+                } elseif (empty($m['missing_since'])) {
+                    $m['missing_since'] = time();
+                }
+                $meta[$asin] = $m;
                 $ok++;
             }
         }
 
         // on ne garde que les ASIN encore suivis
-        $cache = array_intersect_key($cache, array_flip($asins));
+        $keep  = array_flip($asins);
+        $cache = array_intersect_key($cache, $keep);
+        $meta  = array_intersect_key($meta, $keep);
         update_option(self::OPT_CACHE, $cache, false);
+        update_option(self::OPT_META, $meta, false);
 
         $status['last_run']   = time();
         $status['last_count'] = $ok;
@@ -378,10 +492,10 @@ final class MCM_Prix
         }
         $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
         wp_mail(
-            get_option('admin_email'),
+            self::alert_to(),
             '[' . $site . '] Prix Amazon : actualisation en échec',
             "Les prix Amazon ne sont plus actualisés depuis plus de 3 heures.\n" .
-            "Le site affiche automatiquement « Voir l’offre » à la place des prix périmés.\n\n" .
+            'Le site affiche automatiquement « ' . self::fallback_label() . " » à la place des prix périmés.\n\n" .
             'Dernière erreur : ' . $error . "\n\n" .
             'Réglages : ' . admin_url('options-general.php?page=mcm-prix')
         );
@@ -405,7 +519,7 @@ final class MCM_Prix
     }
 
     /* ------------------------------------------------------------------ */
-    /* Suivi des ASIN                                                       */
+    /* Suivi des ASIN et surveillance                                       */
     /* ------------------------------------------------------------------ */
 
     private static function register_asin($asin)
@@ -438,9 +552,233 @@ final class MCM_Prix
         if (wp_is_post_revision($post_id) || (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE)) {
             return;
         }
-        foreach (self::asins_in_content($post->post_content) as $a) {
-            self::register_asin($a);
+        $found = self::asins_in_content($post->post_content);
+        if (!$found) {
+            return;
         }
+        $meta = (array) get_option(self::OPT_META, []);
+        foreach ($found as $a) {
+            self::register_asin($a);
+            $m = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
+            $p = isset($m['posts']) ? (array) $m['posts'] : [];
+            if (!in_array((int) $post_id, $p, true)) {
+                $p[]        = (int) $post_id;
+                $m['posts'] = array_slice($p, -10);
+                $meta[$a]   = $m;
+            }
+        }
+        update_option(self::OPT_META, $meta, false);
+    }
+
+    /** Liste d'articles (titre + lien de modification) pour un ASIN. */
+    private static function posts_for($asin, array $meta)
+    {
+        $out = [];
+        foreach ((array) ($meta[$asin]['posts'] ?? []) as $id) {
+            $p = get_post((int) $id);
+            if (!$p || $p->post_status === 'trash') {
+                continue;
+            }
+            $out[] = ['title' => get_the_title($p), 'url' => get_edit_post_link($p->ID, 'raw')];
+        }
+        return $out;
+    }
+
+    /** Produits sans offre depuis N jours et prix qui s'écartent de la référence. */
+    public static function watch_report()
+    {
+        $asins = array_keys((array) get_option(self::OPT_ASINS, []));
+        $cache = (array) get_option(self::OPT_CACHE, []);
+        $meta  = (array) get_option(self::OPT_META, []);
+        $days  = max(1, (int) self::opt('alert_days'));
+        $pct   = max(5, (int) self::opt('deviation_pct'));
+
+        $missing = [];
+        $dev     = [];
+        foreach ($asins as $a) {
+            $m     = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
+            $since = (int) ($m['missing_since'] ?? 0);
+            if ($since && (time() - $since) >= $days * DAY_IN_SECONDS) {
+                $missing[$a] = ['since' => $since, 'err' => (string) ($cache[$a]['err'] ?? ''), 'posts' => self::posts_for($a, $meta)];
+            }
+            $e = $cache[$a] ?? [];
+            if (!empty($e['offer']) && !empty($m['ref'])) {
+                $cur = (float) $e['offer']['amount'];
+                $d   = ($cur - (float) $m['ref']) / (float) $m['ref'] * 100;
+                if (abs($d) >= $pct) {
+                    $dev[$a] = ['ref' => (float) $m['ref'], 'cur' => $cur, 'pct' => $d, 'posts' => self::posts_for($a, $meta)];
+                }
+            }
+        }
+        return ['missing' => $missing, 'dev' => $dev];
+    }
+
+    private static function money($v)
+    {
+        return number_format((float) $v, 2, ',', ' ') . ' €';
+    }
+
+    /** E-mail hebdomadaire : envoyé seulement s'il y a quelque chose à signaler. */
+    public static function send_digest()
+    {
+        if (self::opt('digest') !== '1' || !self::configured()) {
+            return;
+        }
+        $rep = self::watch_report();
+        if (!$rep['missing'] && !$rep['dev']) {
+            return;
+        }
+        $lines = [];
+        if ($rep['missing']) {
+            $lines[] = 'PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
+            foreach ($rep['missing'] as $a => $x) {
+                $lines[] = '- ' . $a . ' : sans offre depuis ' . human_time_diff($x['since']) . ($x['err'] !== '' ? ' (' . $x['err'] . ')' : '');
+                foreach ($x['posts'] as $p) {
+                    $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
+                }
+            }
+            $lines[] = '';
+        }
+        if ($rep['dev']) {
+            $lines[] = 'PRIX QUI S\'ÉCARTENT DE LA RÉFÉRENCE (relire le texte de l\'article) :';
+            foreach ($rep['dev'] as $a => $x) {
+                $lines[] = '- ' . $a . ' : ' . self::money($x['ref']) . ' → ' . self::money($x['cur']) . ' (' . ($x['pct'] > 0 ? '+' : '') . round($x['pct']) . ' %)';
+                foreach ($x['posts'] as $p) {
+                    $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
+                }
+            }
+            $lines[] = '';
+        }
+        $lines[] = 'Réglages : ' . admin_url('options-general.php?page=mcm-prix');
+        $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+        wp_mail(self::alert_to(), '[' . $site . '] Prix Amazon : produits à surveiller', implode("\n", $lines));
+        $status                = (array) get_option(self::OPT_STATUS, []);
+        $status['last_digest'] = time();
+        update_option(self::OPT_STATUS, $status, false);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Mises à jour automatiques (GitHub)                                   */
+    /* ------------------------------------------------------------------ */
+
+    /** Lit update.json (mis en cache) : retourne ['version','package','sha256',...] ou null. */
+    private static function remote_info($force = false)
+    {
+        $c = get_transient(self::UPD_CACHE);
+        if (!$force && is_array($c)) {
+            return $c['info'];
+        }
+        $info = null;
+        $r    = wp_remote_get(self::UPDATE_JSON, ['timeout' => 10, 'headers' => ['Accept' => 'application/json']]);
+        if (!is_wp_error($r) && (int) wp_remote_retrieve_response_code($r) === 200) {
+            $d = json_decode(wp_remote_retrieve_body($r), true);
+            if (is_array($d)
+                && !empty($d['version']) && preg_match('/^\d+(\.\d+){1,3}$/', (string) $d['version'])
+                && !empty($d['package']) && strpos((string) $d['package'], self::PACKAGE_PREFIX) === 0
+                && !empty($d['sha256']) && preg_match('/^[0-9a-f]{64}$/i', (string) $d['sha256'])) {
+                $info = [
+                    'version'      => (string) $d['version'],
+                    'package'      => (string) $d['package'],
+                    'sha256'       => strtolower((string) $d['sha256']),
+                    'homepage'     => (string) ($d['homepage'] ?? 'https://github.com/beefree02-h/mcm-prix-amazon'),
+                    'requires'     => (string) ($d['requires'] ?? '5.8'),
+                    'requires_php' => (string) ($d['requires_php'] ?? '7.4'),
+                    'changelog'    => (string) ($d['changelog'] ?? ''),
+                ];
+            }
+        }
+        set_transient(self::UPD_CACHE, ['info' => $info, 'checked' => time()], $info ? 3 * HOUR_IN_SECONDS : 30 * MINUTE_IN_SECONDS);
+        return $info;
+    }
+
+    public static function check_update($transient)
+    {
+        if (!is_object($transient)) {
+            return $transient;
+        }
+        $info   = self::remote_info();
+        $plugin = plugin_basename(__FILE__);
+        $item   = (object) [
+            'id'           => 'github.com/beefree02-h/mcm-prix-amazon',
+            'slug'         => self::SLUG,
+            'plugin'       => $plugin,
+            'new_version'  => self::VERSION,
+            'url'          => 'https://github.com/beefree02-h/mcm-prix-amazon',
+            'package'      => '',
+            'requires_php' => '7.4',
+        ];
+        if ($info && version_compare($info['version'], self::VERSION, '>')) {
+            $item->new_version  = $info['version'];
+            $item->url          = $info['homepage'];
+            $item->package      = $info['package'];
+            $item->requires_php = $info['requires_php'];
+            if (isset($transient->no_update[$plugin])) {
+                unset($transient->no_update[$plugin]);
+            }
+            $transient->response[$plugin] = $item;
+        } else {
+            if (isset($transient->response[$plugin])) {
+                unset($transient->response[$plugin]);
+            }
+            $transient->no_update[$plugin] = $item;
+        }
+        return $transient;
+    }
+
+    public static function plugins_api($res, $action, $args)
+    {
+        if ($action !== 'plugin_information' || empty($args->slug) || $args->slug !== self::SLUG) {
+            return $res;
+        }
+        $info = self::remote_info();
+        if (!$info) {
+            return $res;
+        }
+        return (object) [
+            'name'          => 'Prix Amazon Creators',
+            'slug'          => self::SLUG,
+            'version'       => $info['version'],
+            'homepage'      => $info['homepage'],
+            'requires'      => $info['requires'],
+            'requires_php'  => $info['requires_php'],
+            'download_link' => $info['package'],
+            'sections'      => [
+                'description' => 'Prix Amazon actualisés via l\'API Creators, avec repli automatique.',
+                'changelog'   => nl2br(esc_html($info['changelog'])),
+            ],
+        ];
+    }
+
+    /** Télécharge le paquet et vérifie son empreinte SHA-256 avant toute installation. */
+    public static function verify_package($reply, $package, $upgrader = null)
+    {
+        if ($reply !== false || !is_string($package) || strpos($package, self::PACKAGE_PREFIX) !== 0) {
+            return $reply;
+        }
+        $info = self::remote_info();
+        if (!$info || $info['package'] !== $package) {
+            return new WP_Error('mcm_prix_pkg', 'Paquet de mise à jour non reconnu : installation annulée.');
+        }
+        if (!function_exists('download_url')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+        $tmp = download_url($package, 300);
+        if (is_wp_error($tmp)) {
+            return $tmp;
+        }
+        if (!hash_equals($info['sha256'], strtolower((string) hash_file('sha256', $tmp)))) {
+            @unlink($tmp);
+            return new WP_Error('mcm_prix_hash', 'Contrôle d\'intégrité (SHA-256) échoué : mise à jour annulée.');
+        }
+        return $tmp;
+    }
+
+    public static function force_auto_update($update, $item)
+    {
+        if (is_object($item) && isset($item->plugin) && $item->plugin === plugin_basename(__FILE__) && self::opt('auto_update') === '1') {
+            return true;
+        }
+        return $update;
     }
 
     /* ------------------------------------------------------------------ */
@@ -457,7 +795,7 @@ final class MCM_Prix
 
     private static function fallback_html($asin, $entry)
     {
-        return '<a class="mcm-prix-repli" href="' . esc_url(self::fallback_url($asin, $entry)) . '" target="_blank" rel="sponsored nofollow noopener">Voir l’offre</a>';
+        return '<a class="mcm-prix-repli" href="' . esc_url(self::fallback_url($asin, $entry)) . '" target="_blank" rel="sponsored nofollow noopener">' . esc_html(self::fallback_label()) . '</a>';
     }
 
     public static function shortcode($atts)
@@ -490,7 +828,7 @@ final class MCM_Prix
         }
         $note = '';
         if ($a['horodatage'] !== '0') {
-            $note = ' <small class="mcm-prix-note">(au ' . esc_html(wp_date('d/m/Y à H\hi', (int) $entry['ts'])) . ' – <a href="#mcm-prix-avis">Précisions</a>)</small>';
+            $note = ' <small class="mcm-prix-note">(au ' . esc_html(wp_date('d/m/Y à H\hi', (int) $entry['ts'])) . ' – <a href="#mcm-prix-avis">' . esc_html(self::details_label()) . '</a>)</small>';
         }
         $exp = (int) $entry['ts'] + self::TTL;
         return '<span class="mcm-prix" data-exp="' . $exp . '" data-fb="' . esc_attr($fb) . '">' . $price . $note . '</span>';
@@ -503,7 +841,7 @@ final class MCM_Prix
         }
         echo '<style id="mcm-prix-css">.mcm-prix-note{font-size:.75em;opacity:.75;white-space:nowrap}.mcm-prix-montant{font-weight:inherit}.mcm-prix-avis{font-size:.8em;opacity:.8;margin:1.5em auto;max-width:60em;padding:0 1em}</style>';
         if (self::$displayed) {
-            echo '<p id="mcm-prix-avis" class="mcm-prix-avis">Les prix et la disponibilité du produit sont exacts à la date et à l\'heure indiqués et peuvent être modifiés. Les informations sur les prix et la disponibilité affichées sur ' . esc_html(self::opt('marketplace') === 'www.amazon.fr' ? 'Amazon.fr' : self::opt('marketplace')) . ' au moment de l\'achat s\'appliqueront à l\'achat de ce produit.</p>';
+            echo '<p id="mcm-prix-avis" class="mcm-prix-avis">' . esc_html(self::legal_text()) . '</p>';
         }
         // Filet de sécurité si la page est servie depuis un cache de pages : un prix expiré bascule sur le lien.
         echo '<script>(function(){var n=Math.floor(Date.now()/1000);document.querySelectorAll(".mcm-prix[data-exp]").forEach(function(e){if(n>parseInt(e.getAttribute("data-exp"),10)){e.innerHTML=e.getAttribute("data-fb");e.classList.add("mcm-prix--repli");}});})();</script>';
@@ -539,6 +877,19 @@ final class MCM_Prix
         $ver                = isset($in['version']) ? (string) $in['version'] : '3.2';
         $out['version']     = isset(self::TOKEN_ENDPOINTS[$ver]) ? $ver : '3.2';
         $out['purge_cache'] = !empty($in['purge_cache']) ? '1' : '0';
+
+        $fl = isset($in['fallback_label']) ? trim(sanitize_text_field($in['fallback_label'])) : $old['fallback_label'];
+        $out['fallback_label'] = $fl !== '' ? $fl : 'Voir l’offre';
+        $dl = isset($in['details_label']) ? trim(sanitize_text_field($in['details_label'])) : $old['details_label'];
+        $out['details_label'] = $dl !== '' ? $dl : 'Précisions';
+        $out['legal_text']    = isset($in['legal_text']) ? trim(sanitize_textarea_field($in['legal_text'])) : $old['legal_text'];
+
+        $out['auto_update']   = !empty($in['auto_update']) ? '1' : '0';
+        $out['digest']        = !empty($in['digest']) ? '1' : '0';
+        $out['alert_days']    = (string) min(30, max(1, (int) ($in['alert_days'] ?? 3)));
+        $out['deviation_pct'] = (string) min(90, max(5, (int) ($in['deviation_pct'] ?? 30)));
+        $mail                 = isset($in['alert_email']) ? sanitize_email($in['alert_email']) : '';
+        $out['alert_email']   = is_email($mail) ? $mail : '';
         return $out;
     }
 
@@ -610,15 +961,62 @@ final class MCM_Prix
     {
         self::guard('mcm_prix_rescan');
         global $wpdb;
-        $rows  = $wpdb->get_col("SELECT post_content FROM {$wpdb->posts} WHERE post_content LIKE '%[prix %' AND post_status IN ('publish','draft','pending','private','future')");
+        $rows  = $wpdb->get_results("SELECT ID, post_content FROM {$wpdb->posts} WHERE post_content LIKE '%[prix %' AND post_status IN ('publish','draft','pending','private','future')");
         $found = [];
-        foreach ($rows as $content) {
-            foreach (self::asins_in_content($content) as $a) {
-                $found[$a] = time();
+        $posts = [];
+        foreach ($rows as $row) {
+            foreach (self::asins_in_content($row->post_content) as $a) {
+                $found[$a]   = time();
+                $posts[$a][] = (int) $row->ID;
             }
         }
         update_option(self::OPT_ASINS, $found, false);
+
+        $meta = (array) get_option(self::OPT_META, []);
+        $new  = [];
+        foreach ($found as $a => $_) {
+            $m          = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
+            $m['posts'] = array_slice($posts[$a], 0, 10);
+            $new[$a]    = $m;
+        }
+        update_option(self::OPT_META, $new, false);
         self::flash('Liste reconstruite : ' . count($found) . ' ASIN suivis.');
+        self::back();
+    }
+
+    /** Fixe les prix actuels comme nouveaux prix de référence (après relecture des articles). */
+    public static function action_setref()
+    {
+        self::guard('mcm_prix_setref');
+        $cache = (array) get_option(self::OPT_CACHE, []);
+        $meta  = (array) get_option(self::OPT_META, []);
+        $n     = 0;
+        foreach ($cache as $a => $e) {
+            if (!empty($e['offer'])) {
+                $m           = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
+                $m['ref']    = (float) $e['offer']['amount'];
+                $m['ref_ts'] = time();
+                $meta[$a]    = $m;
+                $n++;
+            }
+        }
+        update_option(self::OPT_META, $meta, false);
+        self::flash($n . ' prix de référence mis à jour avec les prix actuels.');
+        self::back();
+    }
+
+    public static function action_check_update()
+    {
+        self::guard('mcm_prix_check_update');
+        $info = self::remote_info(true);
+        delete_site_transient('update_plugins');
+        if (!$info) {
+            self::flash('Impossible de lire les informations de mise à jour (GitHub injoignable ou fichier invalide).', 'error');
+        } elseif (version_compare($info['version'], self::VERSION, '>')) {
+            self::flash('Version ' . $info['version'] . ' disponible (installée : ' . self::VERSION . '). Rendez-vous dans Extensions pour l\'installer, ou elle le sera automatiquement.', 'warning');
+        } else {
+            self::flash('Le plugin est à jour (version ' . self::VERSION . ').');
+        }
         self::back();
     }
 
@@ -638,13 +1036,13 @@ final class MCM_Prix
         }
         $url = esc_url(admin_url('options-general.php?page=mcm-prix'));
         if (!self::configured()) {
-            echo '<div class="notice notice-warning"><p><strong>Prix Amazon</strong> : identifiants API non renseignés, les prix affichent « Voir l’offre ». <a href="' . $url . '">Réglages</a></p></div>';
+            echo '<div class="notice notice-warning"><p><strong>Prix Amazon</strong> : identifiants API non renseignés, les prix affichent « ' . esc_html(self::fallback_label()) . ' ». <a href="' . $url . '">Réglages</a></p></div>';
             return;
         }
         $st      = (array) get_option(self::OPT_STATUS, []);
         $last_ok = (int) ($st['last_ok'] ?? 0);
         if (!$last_ok || (time() - $last_ok) > 2 * HOUR_IN_SECONDS) {
-            echo '<div class="notice notice-error"><p><strong>Prix Amazon</strong> : les prix ne sont plus actualisés' . ($last_ok ? ' depuis ' . esc_html(human_time_diff($last_ok)) : '') . '. Le site affiche « Voir l’offre ». ' . (!empty($st['last_error']) ? esc_html($st['last_error']) . ' ' : '') . '<a href="' . $url . '">Réglages</a></p></div>';
+            echo '<div class="notice notice-error"><p><strong>Prix Amazon</strong> : les prix ne sont plus actualisés' . ($last_ok ? ' depuis ' . esc_html(human_time_diff($last_ok)) : '') . '. Le site affiche « ' . esc_html(self::fallback_label()) . ' ». ' . (!empty($st['last_error']) ? esc_html($st['last_error']) . ' ' : '') . '<a href="' . $url . '">Réglages</a></p></div>';
         }
     }
 
@@ -657,24 +1055,78 @@ final class MCM_Prix
         $st      = (array) get_option(self::OPT_STATUS, []);
         $asins   = (array) get_option(self::OPT_ASINS, []);
         $cache   = (array) get_option(self::OPT_CACHE, []);
-        $by_const = defined('MCM_PRIX_CLIENT_SECRET') && MCM_PRIX_CLIENT_SECRET !== '';
+        $meta    = (array) get_option(self::OPT_META, []);
+        $api     = (array) get_option(self::OPT_API, []);
+        $by_const = self::from_const('client_secret');
         $fmt     = function ($t) {
             return $t ? esc_html(wp_date('d/m/Y H:i', (int) $t)) : '—';
         };
-        $next = wp_next_scheduled(self::CRON_HOOK);
-        $nonce = function ($a) {
+        $next    = wp_next_scheduled(self::CRON_HOOK);
+        $nonce   = function ($a) {
             return wp_nonce_field($a, '_wpnonce', true, false);
         };
+        $cron_off   = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
+        $cron_late  = $next && !$cron_off && (time() - $next) > 15 * MINUTE_IN_SECONDS;
+        $calls_today = (($api['day'] ?? '') === wp_date('Y-m-d')) ? (int) ($api['n'] ?? 0) : 0;
+        $per_day    = 48 * (int) ceil(max(1, count($asins)) / 10);
+        $upd        = get_transient(self::UPD_CACHE);
+        $rep        = self::watch_report();
+        $cfg_secret_db = !self::from_const('client_secret') && $s['client_secret'] !== '';
         ?>
         <div class="wrap">
-            <h1>Prix Amazon (API Creators)</h1>
+            <h1>Prix Amazon (API Creators) <small style="font-weight:normal;color:#646970">v<?php echo esc_html(self::VERSION); ?></small></h1>
+
+            <?php if ($cfg_secret_db) : ?>
+                <div class="notice notice-info inline"><p><strong>Conseil de sécurité.</strong> Le secret est enregistré dans la base de données. Il est plus sûr de le placer dans <code>wp-config.php</code> :
+                    <code>define('MCM_PRIX_CLIENT_SECRET', '…');</code> (idem <code>MCM_PRIX_CLIENT_ID</code> et <code>MCM_PRIX_PARTNER_TAG</code>). Le même secret sert pour tous vos sites : s'il change, il faut le mettre à jour partout.</p></div>
+            <?php endif; ?>
+
+            <?php if ($rep['missing'] || $rep['dev']) : ?>
+                <div class="notice notice-warning inline" style="padding:8px 12px">
+                    <p><strong>À surveiller</strong></p>
+                    <?php if ($rep['missing']) : ?>
+                        <p>Sans offre depuis au moins <?php echo (int) $s['alert_days']; ?> jour(s) : à remplacer ou à vérifier.</p>
+                        <ul style="list-style:disc;margin-left:20px">
+                        <?php foreach ($rep['missing'] as $a => $x) : ?>
+                            <li><code><?php echo esc_html($a); ?></code> — depuis <?php echo esc_html(human_time_diff($x['since'])); ?><?php echo $x['err'] !== '' ? ' (' . esc_html($x['err']) . ')' : ''; ?>
+                                <?php foreach ($x['posts'] as $p) : ?> · <a href="<?php echo esc_url($p['url']); ?>"><?php echo esc_html($p['title']); ?></a><?php endforeach; ?></li>
+                        <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                    <?php if ($rep['dev']) : ?>
+                        <p>Prix éloigné de la référence d'au moins <?php echo (int) $s['deviation_pct']; ?> % : relire le texte de l'article.</p>
+                        <ul style="list-style:disc;margin-left:20px">
+                        <?php foreach ($rep['dev'] as $a => $x) : ?>
+                            <li><code><?php echo esc_html($a); ?></code> — <?php echo esc_html(self::money($x['ref'])); ?> → <?php echo esc_html(self::money($x['cur'])); ?> (<?php echo ($x['pct'] > 0 ? '+' : '') . (int) round($x['pct']); ?> %)
+                                <?php foreach ($x['posts'] as $p) : ?> · <a href="<?php echo esc_url($p['url']); ?>"><?php echo esc_html($p['title']); ?></a><?php endforeach; ?></li>
+                        <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
 
             <h2>État</h2>
-            <table class="widefat striped" style="max-width:720px">
+            <table class="widefat striped" style="max-width:760px">
                 <tr><th>Dernière actualisation réussie</th><td><?php echo $fmt($st['last_ok'] ?? 0); ?></td></tr>
                 <tr><th>Dernière tentative</th><td><?php echo $fmt($st['last_run'] ?? 0); ?><?php if (!empty($st['last_error'])) { echo ' — <span style="color:#b32d2e">' . esc_html($st['last_error']) . '</span>'; } ?></td></tr>
-                <tr><th>Prochaine tâche planifiée</th><td><?php echo $fmt($next); ?></td></tr>
+                <tr><th>Prochaine tâche planifiée</th><td><?php echo $fmt($next); ?>
+                    <?php if ($cron_off) : ?> <span style="color:#996800">— WP-Cron est désactivé : une tâche du serveur doit appeler wp-cron.php</span>
+                    <?php elseif ($cron_late) : ?> <span style="color:#b32d2e">— en retard : WP-Cron semble bloqué (site peu visité ?). Voir LISEZ-MOI, point 6.</span><?php endif; ?></td></tr>
                 <tr><th>ASIN suivis</th><td><?php echo (int) count($asins); ?></td></tr>
+                <tr><th>Requêtes API aujourd'hui</th><td><?php echo (int) $calls_today; ?> sur <?php echo (int) self::DAILY_QUOTA; ?> (quota initial, partagé par tous vos sites) — environ <?php echo (int) $per_day; ?> par jour pour ce site<?php if (!empty($api['last429'])) { echo ' — <span style="color:#b32d2e">limite atteinte le ' . $fmt($api['last429']) . '</span>'; } ?></td></tr>
+                <tr><th>Identifiants</th><td><?php echo self::from_const('client_secret') ? 'dans wp-config.php' : 'dans la base de données'; ?></td></tr>
+                <tr><th>Version du plugin</th><td>
+                    <?php echo esc_html(self::VERSION); ?>
+                    <?php if (is_array($upd) && !empty($upd['info'])) :
+                        echo version_compare($upd['info']['version'], self::VERSION, '>') ? ' — <strong>version ' . esc_html($upd['info']['version']) . ' disponible</strong>' : ' — à jour';
+                        echo ' <span class="description">(vérifié le ' . $fmt($upd['checked'] ?? 0) . ')</span>';
+                    elseif (is_array($upd)) :
+                        echo ' — <span style="color:#996800">vérification impossible (GitHub injoignable)</span>';
+                    else :
+                        echo ' <span class="description">(pas encore vérifié)</span>';
+                    endif; ?>
+                    — mise à jour automatique : <?php echo $s['auto_update'] === '1' ? 'activée' : 'désactivée'; ?></td></tr>
+                <tr><th>Dernier e-mail de synthèse</th><td><?php echo $fmt($st['last_digest'] ?? 0); ?></td></tr>
             </table>
             <p>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline">
@@ -687,14 +1139,21 @@ final class MCM_Prix
                     <?php echo $nonce('mcm_prix_rescan'); ?>
                     <?php submit_button('Reconstruire la liste des ASIN', 'secondary', 'submit', false); ?>
                 </form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline;margin-left:8px">
+                    <input type="hidden" name="action" value="mcm_prix_check_update">
+                    <?php echo $nonce('mcm_prix_check_update'); ?>
+                    <?php submit_button('Vérifier les mises à jour', 'secondary', 'submit', false); ?>
+                </form>
             </p>
 
-            <h2>Identifiants</h2>
             <form method="post" action="options.php">
                 <?php settings_fields('mcm_prix'); ?>
+
+                <h2>Identifiants</h2>
                 <table class="form-table" role="presentation">
                     <tr><th><label for="mcm_cid">Identifiant client</label></th>
-                        <td><input id="mcm_cid" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[client_id]" value="<?php echo esc_attr($s['client_id']); ?>" placeholder="amzn1.application-oa2-client...." autocomplete="off"></td></tr>
+                        <td><?php if (self::from_const('client_id')) : ?><em>Défini dans wp-config.php (MCM_PRIX_CLIENT_ID).</em><?php else : ?>
+                            <input id="mcm_cid" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[client_id]" value="<?php echo esc_attr($s['client_id']); ?>" placeholder="amzn1.application-oa2-client...." autocomplete="off"><?php endif; ?></td></tr>
                     <tr><th><label for="mcm_sec">Secret</label></th>
                         <td><?php if ($by_const) : ?>
                             <em>Défini dans wp-config.php (MCM_PRIX_CLIENT_SECRET).</em>
@@ -708,13 +1167,44 @@ final class MCM_Prix
                             <?php endforeach; ?>
                         </select> <span class="description">Indiquée à côté de l'identifiant dans Associates Central.</span></td></tr>
                     <tr><th><label for="mcm_tag">Tag Partenaires de ce site</label></th>
-                        <td><input id="mcm_tag" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[partner_tag]" value="<?php echo esc_attr($s['partner_tag']); ?>" placeholder="monsite-21" autocomplete="off">
-                            <p class="description">Un tag différent par site.</p></td></tr>
+                        <td><?php if (self::from_const('partner_tag')) : ?><em>Défini dans wp-config.php (MCM_PRIX_PARTNER_TAG).</em><?php else : ?>
+                            <input id="mcm_tag" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[partner_tag]" value="<?php echo esc_attr($s['partner_tag']); ?>" placeholder="monsite-21" autocomplete="off">
+                            <p class="description">Un tag différent par site.</p><?php endif; ?></td></tr>
                     <tr><th><label for="mcm_mkt">Boutique</label></th>
                         <td><input id="mcm_mkt" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[marketplace]" value="<?php echo esc_attr($s['marketplace']); ?>"></td></tr>
                     <tr><th>Cache de pages</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[purge_cache]" value="1" <?php checked($s['purge_cache'], '1'); ?>> Vider le cache de pages après chaque actualisation</label>
-                            <p class="description">Facultatif. Sans cela, un prix périmé dans une page en cache bascule tout de même sur « Voir l’offre » côté navigateur.</p></td></tr>
+                            <p class="description">Facultatif. Sans cela, un prix périmé dans une page en cache bascule tout de même sur le lien de repli côté navigateur.</p></td></tr>
+                </table>
+
+                <h2>Textes affichés</h2>
+                <table class="form-table" role="presentation">
+                    <tr><th><label for="mcm_fl">Texte de repli</label></th>
+                        <td><input id="mcm_fl" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[fallback_label]" value="<?php echo esc_attr($s['fallback_label']); ?>" placeholder="Voir l’offre">
+                            <p class="description">Affiché (avec le lien affilié) quand le prix n'est pas disponible ou plus à jour.</p></td></tr>
+                    <tr><th><label for="mcm_dl">Libellé du lien d'avis</label></th>
+                        <td><input id="mcm_dl" class="regular-text" type="text" name="<?php echo self::OPT_SETTINGS; ?>[details_label]" value="<?php echo esc_attr($s['details_label']); ?>" placeholder="Précisions">
+                            <p class="description">Dans « (au 08/11/2026 à 12h04 – Précisions) ». Le lien mène à l'avis en bas de page.</p></td></tr>
+                    <tr><th><label for="mcm_lt">Avis en bas de page</label></th>
+                        <td><textarea id="mcm_lt" class="large-text" rows="3" name="<?php echo self::OPT_SETTINGS; ?>[legal_text]" placeholder="<?php echo esc_attr(self::LEGAL_DEFAULT); ?>"><?php echo esc_textarea($s['legal_text']); ?></textarea>
+                            <p class="description">Laissez vide pour le texte par défaut. <code>{boutique}</code> est remplacé par Amazon.fr. Gardez le sens du texte d'origine : il répond à une obligation du programme Partenaires.</p></td></tr>
+                </table>
+
+                <h2>Surveillance et mises à jour</h2>
+                <table class="form-table" role="presentation">
+                    <tr><th>Mises à jour automatiques</th>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[auto_update]" value="1" <?php checked($s['auto_update'], '1'); ?>> Installer automatiquement les nouvelles versions du plugin (depuis GitHub)</label>
+                            <p class="description">Le paquet est vérifié (empreinte SHA-256) avant installation. Vous gardez la main depuis la page Extensions.</p></td></tr>
+                    <tr><th>E-mail de synthèse</th>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[digest]" value="1" <?php checked($s['digest'], '1'); ?>> Envoyer chaque lundi les produits à surveiller (seulement s'il y en a)</label></td></tr>
+                    <tr><th><label for="mcm_ad">Produit sans offre</label></th>
+                        <td>signalé après <input id="mcm_ad" type="number" min="1" max="30" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[alert_days]" value="<?php echo esc_attr($s['alert_days']); ?>"> jour(s)</td></tr>
+                    <tr><th><label for="mcm_dp">Écart de prix</label></th>
+                        <td>signalé à partir de <input id="mcm_dp" type="number" min="5" max="90" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[deviation_pct]" value="<?php echo esc_attr($s['deviation_pct']); ?>"> % par rapport au prix de référence
+                            <p class="description">Le prix de référence est le premier prix relevé pour chaque produit. Après avoir relu les articles, vous pouvez le remettre à jour avec le bouton plus bas.</p></td></tr>
+                    <tr><th><label for="mcm_em">Adresse d'alerte</label></th>
+                        <td><input id="mcm_em" class="regular-text" type="email" name="<?php echo self::OPT_SETTINGS; ?>[alert_email]" value="<?php echo esc_attr($s['alert_email']); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
+                            <p class="description">Vide : l'adresse de l'administrateur du site.</p></td></tr>
                 </table>
                 <?php submit_button('Enregistrer'); ?>
             </form>
@@ -731,24 +1221,42 @@ final class MCM_Prix
             <?php if (!$asins) : ?>
                 <p>Aucun ASIN pour l'instant : ils sont ajoutés automatiquement dès qu'un article contient <code>[prix asin="..."]</code>.</p>
             <?php else : ?>
-                <table class="widefat striped" style="max-width:720px">
-                    <thead><tr><th>ASIN</th><th>Prix</th><th>Relevé</th><th>État</th></tr></thead>
+                <table class="widefat striped" style="max-width:1000px">
+                    <thead><tr><th>ASIN</th><th>Prix</th><th>Référence</th><th>Écart</th><th>Relevé</th><th>État</th><th>Articles</th></tr></thead>
                     <tbody>
                     <?php foreach (array_keys($asins) as $a) :
                         $e   = $cache[$a] ?? [];
+                        $m   = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
                         $age = !empty($e['ts']) ? time() - (int) $e['ts'] : null;
                         if ($age === null) { $etat = 'pas encore relevé'; }
-                        elseif (empty($e['offer'])) { $etat = 'pas d\'offre' . (!empty($e['err']) ? ' (' . $e['err'] . ')' : ''); }
+                        elseif (empty($e['offer'])) {
+                            $etat = 'pas d\'offre' . (!empty($e['err']) ? ' (' . $e['err'] . ')' : '');
+                            if (!empty($m['missing_since'])) { $etat .= ' depuis ' . human_time_diff((int) $m['missing_since']); }
+                        }
                         elseif ($age < self::FRESH_MAX) { $etat = 'à jour'; }
-                        else { $etat = 'périmé : bouton affiché'; }
+                        else { $etat = 'périmé : lien de repli affiché'; }
+                        $ecart = '—';
+                        if (!empty($e['offer']) && !empty($m['ref'])) {
+                            $d     = ((float) $e['offer']['amount'] - (float) $m['ref']) / (float) $m['ref'] * 100;
+                            $ecart = ($d > 0 ? '+' : '') . (int) round($d) . ' %';
+                        }
                         ?>
                         <tr><td><?php echo esc_html($a); ?></td>
                             <td><?php echo !empty($e['offer']) ? esc_html($e['offer']['display']) : '—'; ?></td>
+                            <td><?php echo !empty($m['ref']) ? esc_html(self::money($m['ref'])) : '—'; ?></td>
+                            <td><?php echo esc_html($ecart); ?></td>
                             <td><?php echo $fmt($e['ts'] ?? 0); ?></td>
-                            <td><?php echo esc_html($etat); ?></td></tr>
+                            <td><?php echo esc_html($etat); ?></td>
+                            <td><?php foreach (self::posts_for($a, $meta) as $p) : ?><a href="<?php echo esc_url($p['url']); ?>"><?php echo esc_html($p['title']); ?></a><br><?php endforeach; ?></td></tr>
                     <?php endforeach; ?>
                     </tbody>
                 </table>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px">
+                    <input type="hidden" name="action" value="mcm_prix_setref">
+                    <?php echo $nonce('mcm_prix_setref'); ?>
+                    <?php submit_button('Prendre les prix actuels comme références', 'secondary', 'submit', false); ?>
+                    <span class="description">À utiliser après avoir relu les articles : les écarts repartent de zéro.</span>
+                </form>
             <?php endif; ?>
         </div>
         <?php

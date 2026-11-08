@@ -1,0 +1,9 @@
+{
+  "version": "1.1.0",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.1.0.zip",
+  "sha256": "233b492e17102471aae54114a56806c939d3f8f7c7dea5060c9123db39a08a7f",
+  "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
+  "requires": "5.8",
+  "requires_php": "7.4",
+  "changelog": "- Mises à jour automatiques depuis GitHub, avec contrôle d'empreinte SHA-256 avant installation.\n- Textes réglables : texte de repli (« Voir l’offre » par défaut), libellé du lien d'avis, avis en bas de page.\n- Produits à surveiller : produits sans offre depuis N jours, avec les articles concernés.\n- Alerte d'écart de prix par rapport au prix de référence (premier prix relevé).\n- E-mail de synthèse hebdomadaire (seulement s'il y a quelque chose à signaler) et adresse d'alerte réglable.\n- Contrôle de santé : cron en retard ou désactivé, requêtes API du jour sur le quota, version et mise à jour disponible.\n- Conseil de sécurité quand le secret est enregistré en base (identifiants possibles dans wp-config.php)."
+}
