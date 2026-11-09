@@ -1,9 +1,9 @@
 {
-  "version": "1.3.1",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.3.1.zip",
-  "sha256": "1e8633e0e4eb055ae324ceef591bb98326d7e01fe25483b9cf5d5c4b636ad775",
+  "version": "1.3.2",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.3.2.zip",
+  "sha256": "1e587abfd8c60e97d86967f983d83529f922de9c396c961c6d919972542f1050",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Alerte quotidienne : dès qu'un produit passe le seuil (sans offre ou écart de prix), un e-mail le signale, une seule fois par produit et au plus un e-mail par jour. Les produits déjà signalés ne reviennent que dans la synthèse du lundi."
+  "changelog": "- Correction du bilan des sites : le site pilote lisait mal son propre état (ligne « ? : v, 0 produits suivis »)."
 }

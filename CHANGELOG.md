@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.2
+- Correction du bilan des sites : le site pilote lisait mal son propre état (ligne « ? : v, 0 produits suivis »).
+
 ## 1.3.1
 - Alerte quotidienne : dès qu'un produit passe le seuil (sans offre ou écart de prix), un e-mail le signale, une seule fois par produit et au plus un e-mail par jour. Les produits déjà signalés ne reviennent que dans la synthèse du lundi.
 

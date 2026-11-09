@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.1
+ * Version:     1.3.2
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.1';
+    const VERSION      = '1.3.2';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -150,6 +150,12 @@ final class MCM_Prix
     /** État du plugin pour un contrôle à distance : aucun identifiant, aucun secret. */
     public static function rest_status($request)
     {
+        return rest_ensure_response(self::status_data());
+    }
+
+    /** État du site sous forme de tableau (utilisé par l'adresse de contrôle et par le bilan du site pilote). */
+    public static function status_data()
+    {
         $st   = (array) get_option(self::OPT_STATUS, []);
         $next = wp_next_scheduled(self::CRON_HOOK);
         $rep  = self::watch_report();
@@ -174,7 +180,7 @@ final class MCM_Prix
             'last_digest_ok'     => isset($st['last_digest_ok']) ? (bool) $st['last_digest_ok'] : null,
             'wordpress_version'  => get_bloginfo('version'),
         ];
-        return rest_ensure_response($res);
+        return $res;
     }
 
     public static function action_regen_key()
@@ -855,8 +861,7 @@ final class MCM_Prix
         }
         $lines = [];
         $flag  = 0;
-        $own   = self::rest_status(null);
-        $own   = is_array($own) ? $own : [];
+        $own   = self::status_data();
         $block = self::overview_lines($own);
         $lines = array_merge($lines, $block);
         $flag += (strpos($block[0], 'À VOIR') === 0) ? 1 : 0;

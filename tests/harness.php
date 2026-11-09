@@ -65,7 +65,8 @@ function rest_url($p = '') { return 'https://example.test/wp-json/' . $p; }
 function add_query_arg($k, $v, $u) { return $u . '?' . $k . '=' . $v; }
 function home_url() { return 'https://example.test'; }
 function wp_parse_url($u, $c = -1) { return parse_url($u, $c); }
-function rest_ensure_response($x) { return $x; }
+class Fake_Resp { public $d; function __construct($d) { $this->d = $d; } function get_data() { return $this->d; } }
+function rest_ensure_response($x) { return new Fake_Resp($x); }
 class Fake_Req { public $p; function __construct($p) { $this->p = $p; } function get_param($k) { return $this->p[$k] ?? null; } }
 function esc_url_raw($u, $protocols = null) { return preg_match('#^https://#', $u) ? $u : ''; }
 function get_bloginfo($k) { return 'Mon Choix Malin'; }
@@ -271,7 +272,7 @@ check('clé de contrôle générée', strlen((string) get_option('mcm_prix_key')
 check('adresse de contrôle : sans clé -> refus 404', is_wp_error(MCM_Prix::rest_allowed(new Fake_Req([]))));
 check('adresse de contrôle : mauvaise clé -> refus', is_wp_error(MCM_Prix::rest_allowed(new Fake_Req(['k' => 'faux']))));
 check('adresse de contrôle : bonne clé -> accès', MCM_Prix::rest_allowed(new Fake_Req(['k' => get_option('mcm_prix_key')])) === true);
-$r = MCM_Prix::rest_status(new Fake_Req([]));
+$r = MCM_Prix::rest_status(new Fake_Req([]))->get_data();
 check('adresse de contrôle : version et site', ($r['plugin_version'] ?? '') === MCM_Prix::VERSION && ($r['site'] ?? '') === 'example.test');
 check('adresse de contrôle : aucun secret exposé', strpos(json_encode($r), (string) (get_option('mcm_prix_settings')['client_secret'] ?? 'SECRET_ABSENT')) === false && !isset($r['client_secret']));
 check('adresse de contrôle : URL contient la clé', strpos(MCM_Prix::control_url(), 'k=' . get_option('mcm_prix_key')) !== false);
@@ -298,6 +299,7 @@ unset($GLOBALS['__mail']);
 $r = MCM_Prix::send_overview(true);
 check('pilote : bilan envoyé même sans alerte sur les sites OK', $r['sent'] === true && isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'OK — a.test') !== false);
 check('pilote : site injoignable signalé', strpos($GLOBALS['__mail'][2], 'À VOIR — b.test : injoignable') !== false && strpos($GLOBALS['__mail'][1], 'à voir') !== false);
+check('pilote : le site pilote figure lui-même dans le bilan', strpos($GLOBALS['__mail'][2], 'example.test : v' . MCM_Prix::VERSION) !== false);
 check('pilote : aucune clé dans le bilan', strpos($GLOBALS['__mail'][2], 'AAA') === false && strpos($GLOBALS['__mail'][2], 'BBB') === false);
 $old = $ok1; $old['plugin_version'] = '1.0.0'; $old['cron_late_minutes'] = 40; $old['missing_count'] = 2;
 $GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode($old)], ['code' => 200, 'body' => json_encode($ok1)]];
