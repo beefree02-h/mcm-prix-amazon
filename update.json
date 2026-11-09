@@ -1,9 +1,9 @@
 {
-  "version": "1.2.5",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.5.zip",
-  "sha256": "8f6827f18950729c73585f49b08583e0f2f989e68178316cc3aedc4f53aba5ae",
+  "version": "1.3.0",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.3.0.zip",
+  "sha256": "8c3f38f9adf4bbc23ab3d3e2aa4d2a63bcee49a8641646cd4bfa81c73e5a3b19",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Adresse de contrôle (lecture seule, protégée par une clé propre à chaque site) : version du plugin, dernière actualisation, retard du cron, produits à surveiller, dernier e-mail de synthèse. Visible dans les réglages, avec un bouton pour changer la clé."
+  "changelog": "- Alerte quand l'actualisation ne s'exécute plus du tout (WP-Cron bloqué) : contrôle à la fin des visites du site, au plus un e-mail par jour, après 3 heures.\n- Site pilote : un seul bilan hebdomadaire (lundi) des 6 sites, même sans alerte (version, état, cron, produits à surveiller), à partir des adresses de contrôle. Bouton « Envoyer le bilan des sites maintenant »."
 }

@@ -1,5 +1,9 @@
 # Journal des versions
 
+## 1.3.0
+- Alerte quand l'actualisation ne s'exécute plus du tout (WP-Cron bloqué) : contrôle à la fin des visites du site, au plus un e-mail par jour, après 3 heures.
+- Site pilote : un seul bilan hebdomadaire (lundi) des 6 sites, même sans alerte (version, état, cron, produits à surveiller), à partir des adresses de contrôle. Bouton « Envoyer le bilan des sites maintenant ».
+
 ## 1.2.5
 - Adresse de contrôle (lecture seule, protégée par une clé propre à chaque site) : version du plugin, dernière actualisation, retard du cron, produits à surveiller, dernier e-mail de synthèse. Visible dans les réglages, avec un bouton pour changer la clé.
 

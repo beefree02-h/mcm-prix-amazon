@@ -67,6 +67,7 @@ function home_url() { return 'https://example.test'; }
 function wp_parse_url($u, $c = -1) { return parse_url($u, $c); }
 function rest_ensure_response($x) { return $x; }
 class Fake_Req { public $p; function __construct($p) { $this->p = $p; } function get_param($k) { return $this->p[$k] ?? null; } }
+function esc_url_raw($u, $protocols = null) { return preg_match('#^https://#', $u) ? $u : ''; }
 function get_bloginfo($k) { return 'Mon Choix Malin'; }
 function wp_specialchars_decode($s, $q = 0) { return $s; }
 function admin_url($p = '') { return 'https://example.test/wp-admin/' . $p; }
@@ -274,6 +275,41 @@ $r = MCM_Prix::rest_status(new Fake_Req([]));
 check('adresse de contrôle : version et site', ($r['plugin_version'] ?? '') === MCM_Prix::VERSION && ($r['site'] ?? '') === 'example.test');
 check('adresse de contrôle : aucun secret exposé', strpos(json_encode($r), (string) (get_option('mcm_prix_settings')['client_secret'] ?? 'SECRET_ABSENT')) === false && !isset($r['client_secret']));
 check('adresse de contrôle : URL contient la clé', strpos(MCM_Prix::control_url(), 'k=' . get_option('mcm_prix_key')) !== false);
+
+// alerte quand l'actualisation ne tourne plus du tout
+$stt = get_option('mcm_prix_status'); $stt['last_ok'] = time() - 4 * 3600; $stt['last_alert'] = 0; $stt['last_error'] = ''; update_option('mcm_prix_status', $stt);
+delete_transient('mcm_prix_stall'); unset($GLOBALS['__mail']);
+MCM_Prix::stall_check();
+check('cron bloqué depuis 4 h : e-mail d\'alerte', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][1], 'échec') !== false && strpos($GLOBALS['__mail'][2], 'WP-Cron') !== false);
+unset($GLOBALS['__mail']); delete_transient('mcm_prix_stall'); MCM_Prix::stall_check();
+check('alerte au plus une fois par jour', !isset($GLOBALS['__mail']));
+$stt = get_option('mcm_prix_status'); $stt['last_ok'] = time() - 600; $stt['last_alert'] = 0; update_option('mcm_prix_status', $stt);
+delete_transient('mcm_prix_stall'); unset($GLOBALS['__mail']); MCM_Prix::stall_check();
+check('actualisation récente : pas d\'alerte', !isset($GLOBALS['__mail']));
+
+// site pilote : bilan de tous les sites
+$st = get_option('mcm_prix_settings');
+$san = MCM_Prix::sanitize_settings(['pilot' => '1', 'pilot_urls' => "https://a.test/wp-json/mcm-prix/v1/status?k=AAA\nhttp://mauvais.test/wp-json/mcm-prix/v1/status?k=B\nhttps://autre.test/ailleurs?k=C\nhttps://b.test/wp-json/mcm-prix/v1/status?k=BBB"]);
+check('pilote : seules les adresses https de contrôle sont gardées', substr_count($san['pilot_urls'], "\n") === 1 && strpos($san['pilot_urls'], 'mauvais') === false && strpos($san['pilot_urls'], 'ailleurs') === false);
+$st = array_merge($st, $san); update_option('mcm_prix_settings', $st);
+$ok1  = ['site' => 'a.test', 'plugin_version' => MCM_Prix::VERSION, 'update_available' => '', 'configured' => true, 'refresh_minutes' => 30, 'last_refresh_ok' => date('c', time() - 600), 'last_error' => '', 'cron_late_minutes' => 0, 'wp_cron_disabled' => false, 'asin_count' => 60, 'missing_count' => 0, 'deviation_count' => 0, 'last_digest_ok' => null];
+$GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode($ok1)]]; // le 2e site ne répond pas
+unset($GLOBALS['__mail']);
+$r = MCM_Prix::send_overview(true);
+check('pilote : bilan envoyé même sans alerte sur les sites OK', $r['sent'] === true && isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'OK — a.test') !== false);
+check('pilote : site injoignable signalé', strpos($GLOBALS['__mail'][2], 'À VOIR — b.test : injoignable') !== false && strpos($GLOBALS['__mail'][1], 'à voir') !== false);
+check('pilote : aucune clé dans le bilan', strpos($GLOBALS['__mail'][2], 'AAA') === false && strpos($GLOBALS['__mail'][2], 'BBB') === false);
+$old = $ok1; $old['plugin_version'] = '1.0.0'; $old['cron_late_minutes'] = 40; $old['missing_count'] = 2;
+$GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode($old)], ['code' => 200, 'body' => json_encode($ok1)]];
+unset($GLOBALS['__mail']); MCM_Prix::send_overview();
+check('pilote : version ancienne, cron en retard, sans offre', strpos($GLOBALS['__mail'][2], 'plus ancienne') !== false && strpos($GLOBALS['__mail'][2], 'cron en retard de 40') !== false && strpos($GLOBALS['__mail'][2], '2 produit(s) sans offre') !== false);
+$st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); $r = MCM_Prix::send_overview();
+check('pilote désactivé : aucun bilan', $r['sent'] === false && !isset($GLOBALS['__mail']));
+$st['pilot'] = '1'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); MCM_Prix::cron_weekly();
+check('lundi : synthèse + bilan partent', isset($GLOBALS['__mail']));
+$st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
 
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');

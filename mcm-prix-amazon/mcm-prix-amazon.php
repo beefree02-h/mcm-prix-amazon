@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.5
+ * Version:     1.3.0
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.5';
+    const VERSION      = '1.3.0';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -64,8 +64,9 @@ final class MCM_Prix
         add_shortcode('prix', [__CLASS__, 'shortcode']);
         add_filter('cron_schedules', [__CLASS__, 'cron_schedules']);
         add_action(self::CRON_HOOK, [__CLASS__, 'refresh_all']);
-        add_action(self::CRON_DIGEST, [__CLASS__, 'send_digest']);
+        add_action(self::CRON_DIGEST, [__CLASS__, 'cron_weekly']);
         add_action('rest_api_init', [__CLASS__, 'register_rest']);
+        add_action('shutdown', [__CLASS__, 'stall_check']);
         add_action('wp_mail_failed', [__CLASS__, 'on_mail_failed']);
         add_action('init', [__CLASS__, 'ensure_scheduled']);
         add_action('wp_footer', [__CLASS__, 'footer'], 50);
@@ -88,6 +89,7 @@ final class MCM_Prix
             add_action('admin_post_mcm_prix_check_update', [__CLASS__, 'action_check_update']);
             add_action('admin_post_mcm_prix_send_digest', [__CLASS__, 'action_send_digest']);
             add_action('admin_post_mcm_prix_regen_key', [__CLASS__, 'action_regen_key']);
+            add_action('admin_post_mcm_prix_send_overview', [__CLASS__, 'action_send_overview']);
         }
     }
 
@@ -230,6 +232,8 @@ final class MCM_Prix
             'legal_text'     => '',
             'auto_update'    => '1',
             'digest'         => '1',
+            'pilot'          => '0',
+            'pilot_urls'     => '',
             'refresh_min'    => '30',
             'alert_days'     => '3',
             'deviation_pct'  => '30',
@@ -759,7 +763,151 @@ final class MCM_Prix
         return number_format((float) $v, 2, ',', ' ') . ' €';
     }
 
+    /**
+     * Filet de sécurité : si WP-Cron ne lance plus l'actualisation du tout, aucune erreur n'est enregistrée.
+     * À la fin d'une visite du site (au plus toutes les 15 minutes), on vérifie l'ancienneté de la dernière actualisation.
+     */
+    public static function stall_check()
+    {
+        if (!self::configured() || get_transient('mcm_prix_stall') || (defined('DOING_CRON') && DOING_CRON)) {
+            return;
+        }
+        set_transient('mcm_prix_stall', 1, 15 * MINUTE_IN_SECONDS);
+        $status = (array) get_option(self::OPT_STATUS, []);
+        if (empty($status['last_ok']) && empty($status['first_run'])) {
+            return;
+        }
+        $err = (string) ($status['last_error'] ?? '');
+        self::maybe_alert($status, $err !== '' ? $err : 'aucune actualisation ne s\'est exécutée (WP-Cron bloqué ?)');
+    }
+
+    /** État d'un autre site lu via son adresse de contrôle : tableau ou message d'erreur. */
+    private static function fetch_remote_status($url)
+    {
+        $fn = function_exists('wp_safe_remote_get') ? 'wp_safe_remote_get' : 'wp_remote_get';
+        $r  = $fn($url, ['timeout' => 15, 'headers' => ['Accept' => 'application/json']]);
+        if (is_wp_error($r)) {
+            return ['error' => $r->get_error_message()];
+        }
+        $code = (int) wp_remote_retrieve_response_code($r);
+        $d    = json_decode(wp_remote_retrieve_body($r), true);
+        if ($code !== 200 || !is_array($d) || empty($d['plugin_version'])) {
+            return ['error' => 'réponse inattendue (code ' . $code . ')'];
+        }
+        return $d;
+    }
+
+    /** Lignes de bilan pour un site à partir de son état (aucune URL ni clé n'y figure). */
+    private static function overview_lines(array $d)
+    {
+        $host  = $d['site'] ?? '?';
+        $warns = [];
+        if (version_compare((string) $d['plugin_version'], self::VERSION, '<')) {
+            $warns[] = 'version plus ancienne que celle du site pilote';
+        }
+        if (!empty($d['update_available'])) {
+            $warns[] = 'mise à jour ' . $d['update_available'] . ' disponible';
+        }
+        if (empty($d['configured'])) {
+            $warns[] = 'identifiants API non renseignés';
+        }
+        $ok = !empty($d['last_refresh_ok']) ? strtotime($d['last_refresh_ok']) : 0;
+        if (!$ok || (time() - $ok) > 2 * HOUR_IN_SECONDS) {
+            $warns[] = 'dernière actualisation trop ancienne' . ($ok ? ' (' . human_time_diff($ok) . ')' : '');
+        }
+        if (!empty($d['last_error'])) {
+            $warns[] = 'erreur : ' . $d['last_error'];
+        }
+        if ((int) ($d['cron_late_minutes'] ?? 0) > 15) {
+            $warns[] = 'cron en retard de ' . (int) $d['cron_late_minutes'] . ' min';
+        }
+        if (!empty($d['wp_cron_disabled'])) {
+            $warns[] = 'WP-Cron désactivé';
+        }
+        if (isset($d['last_digest_ok']) && $d['last_digest_ok'] === false) {
+            $warns[] = 'dernier e-mail de synthèse refusé';
+        }
+        if ((int) ($d['missing_count'] ?? 0) > 0) {
+            $warns[] = (int) $d['missing_count'] . ' produit(s) sans offre';
+        }
+        if ((int) ($d['deviation_count'] ?? 0) > 0) {
+            $warns[] = (int) $d['deviation_count'] . ' écart(s) de prix';
+        }
+        $tag   = $warns ? 'À VOIR' : 'OK';
+        $lines = [$tag . ' — ' . $host . ' : v' . $d['plugin_version'] . ', ' . (int) ($d['asin_count'] ?? 0) . ' produits suivis, actualisation toutes les ' . (int) ($d['refresh_minutes'] ?? 30) . ' min'];
+        foreach ($warns as $w) {
+            $lines[] = '    - ' . $w;
+        }
+        return $lines;
+    }
+
+    /**
+     * Bilan de tous les sites (site pilote) : lit les adresses de contrôle configurées et envoie un seul e-mail,
+     * même quand tout va bien. Retourne ['sent' => bool, 'to' => adresse, 'error' => texte].
+     */
+    public static function send_overview($manual = false)
+    {
+        if (self::opt('pilot') !== '1') {
+            return ['sent' => false, 'to' => '', 'error' => 'le bilan des sites n\'est pas activé sur ce site'];
+        }
+        $lines = [];
+        $flag  = 0;
+        $own   = self::rest_status(null);
+        $own   = is_array($own) ? $own : [];
+        $block = self::overview_lines($own);
+        $lines = array_merge($lines, $block);
+        $flag += (strpos($block[0], 'À VOIR') === 0) ? 1 : 0;
+        foreach (preg_split('/\R+/', (string) self::opt('pilot_urls')) as $u) {
+            $u = trim($u);
+            if ($u === '') {
+                continue;
+            }
+            $d = self::fetch_remote_status($u);
+            if (isset($d['error'])) {
+                $host   = wp_parse_url($u, PHP_URL_HOST);
+                $lines[] = 'À VOIR — ' . $host . ' : injoignable (' . $d['error'] . ')';
+                $flag++;
+                continue;
+            }
+            $block = self::overview_lines($d);
+            $lines = array_merge($lines, $block);
+            $flag += (strpos($block[0], 'À VOIR') === 0) ? 1 : 0;
+        }
+        $lines[] = '';
+        $lines[] = 'Ce bilan est envoyé chaque lundi par le site pilote, même sans alerte.';
+        $to      = self::alert_to();
+        $subject = '[Prix Amazon] Bilan des sites : ' . ($flag ? $flag . ' à voir' : 'tout est en ordre') . ($manual ? ' (envoi manuel)' : '');
+        unset($GLOBALS['mcm_prix_mail_error']);
+        $ok      = (bool) wp_mail($to, $subject, implode("\n", $lines));
+        $err     = $ok ? '' : (string) ($GLOBALS['mcm_prix_mail_error'] ?? 'le serveur d\'envoi a refusé le message');
+        $status  = (array) get_option(self::OPT_STATUS, []);
+        $status['last_overview']    = time();
+        $status['last_overview_ok'] = $ok ? 1 : 0;
+        update_option(self::OPT_STATUS, $status, false);
+        return ['sent' => $ok, 'to' => $to, 'error' => $err];
+    }
+
+    public static function action_send_overview()
+    {
+        self::guard('mcm_prix_send_overview');
+        $r = self::send_overview(true);
+        if ($r['sent']) {
+            self::flash('Bilan des sites envoyé à ' . $r['to'] . '.');
+        } else {
+            self::flash('Bilan non envoyé : ' . $r['error'], 'error');
+        }
+        self::back();
+    }
+
     /** Mémorise la raison d'un échec d'envoi signalé par WordPress. */
+    public static function cron_weekly()
+    {
+        self::send_digest();
+        if (self::opt('pilot') === '1') {
+            self::send_overview();
+        }
+    }
+
     public static function on_mail_failed($err)
     {
         if (is_wp_error($err)) {
@@ -1056,6 +1204,20 @@ final class MCM_Prix
 
         $out['auto_update']   = !empty($in['auto_update']) ? '1' : '0';
         $out['digest']        = !empty($in['digest']) ? '1' : '0';
+        $out['pilot']         = !empty($in['pilot']) ? '1' : '0';
+        // adresses de contrôle des autres sites : une par ligne, https uniquement, 10 au plus
+        if (isset($in['pilot_urls'])) {
+            $keep = [];
+            foreach (preg_split('/\R+/', (string) $in['pilot_urls']) as $line) {
+                $u = esc_url_raw(trim($line), ['https']);
+                if ($u !== '' && strpos($u, '/mcm-prix/v1/status') !== false && count($keep) < 10) {
+                    $keep[$u] = $u;
+                }
+            }
+            $out['pilot_urls'] = implode("\n", $keep);
+        } else {
+            $out['pilot_urls'] = $old['pilot_urls'];
+        }
         $rm                   = (int) ($in['refresh_min'] ?? 30);
         $out['refresh_min']   = (string) (in_array($rm, self::REFRESH_CHOICES, true) ? $rm : 30);
         $out['alert_days']    = (string) min(30, max(1, (int) ($in['alert_days'] ?? 3)));
@@ -1333,6 +1495,13 @@ final class MCM_Prix
                     <?php echo $nonce('mcm_prix_check_update'); ?>
                     <?php submit_button('Vérifier les mises à jour', 'secondary', 'submit', false); ?>
                 </form>
+                <?php if ($s['pilot'] === '1') : ?>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline;margin-left:8px">
+                    <input type="hidden" name="action" value="mcm_prix_send_overview">
+                    <?php echo $nonce('mcm_prix_send_overview'); ?>
+                    <?php submit_button('Envoyer le bilan des sites maintenant', 'secondary', 'submit', false); ?>
+                </form>
+                <?php endif; ?>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline;margin-left:8px">
                     <input type="hidden" name="action" value="mcm_prix_send_digest">
                     <?php echo $nonce('mcm_prix_send_digest'); ?>
@@ -1396,6 +1565,11 @@ final class MCM_Prix
                             <?php endforeach; ?>
                             </select> minutes
                             <p class="description">Un prix reste affiché 1 heure au plus, puis le lien de repli prend le relais. Plus l'intervalle est long, moins il reste de marge si WP-Cron prend du retard (site peu visité) : au-delà de 45 minutes, un petit retard suffit à faire basculer des prix sur le lien de repli. 30 minutes est un bon équilibre.</p></td></tr>
+                    <tr><th>Bilan de tous les sites</th>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[pilot]" value="1" <?php checked($s['pilot'], '1'); ?>> Ce site est le site pilote : il envoie chaque lundi un seul bilan des 6 sites (même sans alerte)</label>
+                            <p class="description">Collez ci-dessous l'adresse de contrôle des <strong>autres</strong> sites (section « Adresse de contrôle » de leurs réglages), une par ligne. À activer sur un seul site.</p>
+                            <textarea class="large-text code" rows="5" name="<?php echo self::OPT_SETTINGS; ?>[pilot_urls]" placeholder="https://autre-site.fr/wp-json/mcm-prix/v1/status?k=…"><?php echo esc_textarea($s['pilot_urls']); ?></textarea>
+                            <p class="description">Ces adresses contiennent des clés en lecture seule : elles ne donnent accès à aucun identifiant Amazon.</p></td></tr>
                     <tr><th>E-mail de synthèse</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[digest]" value="1" <?php checked($s['digest'], '1'); ?>> Envoyer chaque lundi les produits à surveiller (seulement s'il y en a)</label></td></tr>
                     <tr><th><label for="mcm_ad">Produit sans offre</label></th>
