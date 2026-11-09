@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.1
+- Alerte quotidienne : dès qu'un produit passe le seuil (sans offre ou écart de prix), un e-mail le signale, une seule fois par produit et au plus un e-mail par jour. Les produits déjà signalés ne reviennent que dans la synthèse du lundi.
+
 ## 1.3.0
 - Alerte quand l'actualisation ne s'exécute plus du tout (WP-Cron bloqué) : contrôle à la fin des visites du site, au plus un e-mail par jour, après 3 heures.
 - Site pilote : un seul bilan hebdomadaire (lundi) des 6 sites, même sans alerte (version, état, cron, produits à surveiller), à partir des adresses de contrôle. Bouton « Envoyer le bilan des sites maintenant ».

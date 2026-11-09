@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.0
+ * Version:     1.3.1
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.0';
+    const VERSION      = '1.3.1';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -575,6 +575,9 @@ final class MCM_Prix
         if ($ok > 0 && self::opt('purge_cache') === '1') {
             self::purge_page_caches();
         }
+        if ($ok > 0) {
+            self::daily_new_alert();
+        }
         if ($error !== '' && $asins) {
             self::maybe_alert($status, $error);
         }
@@ -915,26 +918,10 @@ final class MCM_Prix
         }
     }
 
-    /**
-     * E-mail de synthèse. Automatique (lundi) : envoyé seulement s'il y a quelque chose à signaler.
-     * Manuel : envoyé dans tous les cas, pour vérifier que les e-mails arrivent.
-     * Retourne ['sent' => bool, 'to' => adresse, 'error' => texte].
-     */
-    public static function send_digest($manual = false)
+    /** Lignes de texte d'un rapport (produits sans offre, écarts de prix) pour les e-mails. */
+    private static function report_lines(array $rep)
     {
-        $manual = ($manual === true);
-        if (!$manual && (self::opt('digest') !== '1' || !self::configured())) {
-            return ['sent' => false, 'to' => '', 'error' => ''];
-        }
-        $rep = self::watch_report();
-        if (!$manual && !$rep['missing'] && !$rep['dev']) {
-            return ['sent' => false, 'to' => '', 'error' => ''];
-        }
         $lines = [];
-        if ($manual) {
-            $lines[] = 'Envoi manuel de la synthèse Prix Amazon (version ' . self::VERSION . '). Si vous lisez ce message, les e-mails du site arrivent bien.';
-            $lines[] = '';
-        }
         if ($rep['missing']) {
             $lines[] = 'PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
             foreach ($rep['missing'] as $a => $x) {
@@ -955,6 +942,88 @@ final class MCM_Prix
             }
             $lines[] = '';
         }
+        return $lines;
+    }
+
+    /**
+     * Alerte quotidienne : seulement les NOUVEAUX problèmes (jamais signalés), au plus un e-mail par jour.
+     * Les produits déjà signalés ne reviennent que dans la synthèse du lundi.
+     */
+    public static function daily_new_alert()
+    {
+        if (self::opt('digest') !== '1' || !self::configured()) {
+            return;
+        }
+        $rep      = self::watch_report();
+        $status   = (array) get_option(self::OPT_STATUS, []);
+        $notified = (array) ($status['notified'] ?? []);
+        $flagged  = [];
+        foreach ($rep['missing'] as $a => $x) {
+            $flagged[$a] = 'm';
+        }
+        foreach ($rep['dev'] as $a => $x) {
+            $flagged[$a] = ($flagged[$a] ?? '') . 'd';
+        }
+        // un produit revenu à la normale pourra être signalé de nouveau plus tard
+        $notified = array_intersect_key($notified, $flagged);
+        $new      = ['missing' => [], 'dev' => []];
+        $n        = 0;
+        foreach ($rep['missing'] as $a => $x) {
+            if (strpos((string) ($notified[$a] ?? ''), 'm') === false) {
+                $new['missing'][$a] = $x;
+                $n++;
+            }
+        }
+        foreach ($rep['dev'] as $a => $x) {
+            if (strpos((string) ($notified[$a] ?? ''), 'd') === false) {
+                $new['dev'][$a] = $x;
+                $n++;
+            }
+        }
+        $status['notified'] = $notified;
+        if ($n === 0 || (time() - (int) ($status['last_new_alert'] ?? 0)) < DAY_IN_SECONDS) {
+            update_option(self::OPT_STATUS, $status, false);
+            return; // rien de nouveau, ou déjà un e-mail dans les dernières 24 h : on attend
+        }
+        $lines   = array_merge(['Nouveaux produits à surveiller depuis le dernier e-mail :', ''], self::report_lines($new));
+        $lines[] = 'Réglages : ' . admin_url('options-general.php?page=mcm-prix');
+        $site    = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+        unset($GLOBALS['mcm_prix_mail_error']);
+        $ok = (bool) wp_mail(self::alert_to(), '[' . $site . '] Prix Amazon : ' . $n . ' nouveau(x) produit(s) à surveiller', implode("\n", $lines));
+        if ($ok) {
+            foreach (array_keys($new['missing']) as $a) {
+                $notified[$a] = ($notified[$a] ?? '') . 'm';
+            }
+            foreach (array_keys($new['dev']) as $a) {
+                $notified[$a] = ($notified[$a] ?? '') . 'd';
+            }
+            $status['notified']       = $notified;
+            $status['last_new_alert'] = time();
+        }
+        update_option(self::OPT_STATUS, $status, false);
+    }
+
+    /**
+     * E-mail de synthèse. Automatique (lundi) : envoyé seulement s'il y a quelque chose à signaler.
+     * Manuel : envoyé dans tous les cas, pour vérifier que les e-mails arrivent.
+     * Retourne ['sent' => bool, 'to' => adresse, 'error' => texte].
+     */
+    public static function send_digest($manual = false)
+    {
+        $manual = ($manual === true);
+        if (!$manual && (self::opt('digest') !== '1' || !self::configured())) {
+            return ['sent' => false, 'to' => '', 'error' => ''];
+        }
+        $rep = self::watch_report();
+        if (!$manual && !$rep['missing'] && !$rep['dev']) {
+            return ['sent' => false, 'to' => '', 'error' => ''];
+        }
+        $lines = [];
+        if ($manual) {
+            $lines[] = 'Envoi manuel de la synthèse Prix Amazon (version ' . self::VERSION . '). Si vous lisez ce message, les e-mails du site arrivent bien.';
+            $lines[] = '';
+        }
+        $lines = array_merge($lines, self::report_lines($rep));
         if ($manual && !$rep['missing'] && !$rep['dev']) {
             $lines[] = 'Aucun produit à surveiller pour le moment.';
             $lines[] = '';
