@@ -9,6 +9,7 @@ delete_option('mcm_prix_cache');
 delete_option('mcm_prix_status');
 delete_option('mcm_prix_meta');
 delete_option('mcm_prix_api');
+delete_option('mcm_prix_key');
 delete_transient('mcm_prix_lock');
 delete_transient('mcm_prix_upd');
 wp_clear_scheduled_hook('mcm_prix_refresh');

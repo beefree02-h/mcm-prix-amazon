@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.4
+ * Version:     1.2.5
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.4';
+    const VERSION      = '1.2.5';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -30,6 +30,7 @@ final class MCM_Prix
     const CRON_DIGEST  = 'mcm_prix_digest';
     const LOCK         = 'mcm_prix_lock';
     const UPD_CACHE    = 'mcm_prix_upd';
+    const OPT_KEY      = 'mcm_prix_key';     // clé de l'adresse de contrôle
 
     // Règle Amazon (doc Creators API, « Best Programming Practices ») : cache des offres 1 h maximum.
     const TTL       = 3600;
@@ -64,6 +65,7 @@ final class MCM_Prix
         add_filter('cron_schedules', [__CLASS__, 'cron_schedules']);
         add_action(self::CRON_HOOK, [__CLASS__, 'refresh_all']);
         add_action(self::CRON_DIGEST, [__CLASS__, 'send_digest']);
+        add_action('rest_api_init', [__CLASS__, 'register_rest']);
         add_action('wp_mail_failed', [__CLASS__, 'on_mail_failed']);
         add_action('init', [__CLASS__, 'ensure_scheduled']);
         add_action('wp_footer', [__CLASS__, 'footer'], 50);
@@ -85,6 +87,7 @@ final class MCM_Prix
             add_action('admin_post_mcm_prix_setref', [__CLASS__, 'action_setref']);
             add_action('admin_post_mcm_prix_check_update', [__CLASS__, 'action_check_update']);
             add_action('admin_post_mcm_prix_send_digest', [__CLASS__, 'action_send_digest']);
+            add_action('admin_post_mcm_prix_regen_key', [__CLASS__, 'action_regen_key']);
         }
     }
 
@@ -114,6 +117,72 @@ final class MCM_Prix
         return $schedules;
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Adresse de contrôle (lecture seule, protégée par une clé)            */
+    /* ------------------------------------------------------------------ */
+
+    public static function control_url()
+    {
+        return add_query_arg('k', (string) get_option(self::OPT_KEY, ''), rest_url('mcm-prix/v1/status'));
+    }
+
+    public static function register_rest()
+    {
+        register_rest_route('mcm-prix/v1', '/status', [
+            'methods'             => 'GET',
+            'callback'            => [__CLASS__, 'rest_status'],
+            'permission_callback' => [__CLASS__, 'rest_allowed'],
+        ]);
+    }
+
+    public static function rest_allowed($request)
+    {
+        $key = (string) get_option(self::OPT_KEY, '');
+        $got = (string) $request->get_param('k');
+        if ($key === '' || !hash_equals($key, $got)) {
+            return new WP_Error('mcm_prix_denied', 'Introuvable.', ['status' => 404]);
+        }
+        return true;
+    }
+
+    /** État du plugin pour un contrôle à distance : aucun identifiant, aucun secret. */
+    public static function rest_status($request)
+    {
+        $st   = (array) get_option(self::OPT_STATUS, []);
+        $next = wp_next_scheduled(self::CRON_HOOK);
+        $rep  = self::watch_report();
+        $upd  = get_transient(self::UPD_CACHE);
+        $new  = (is_array($upd) && !empty($upd['info']['version'])) ? (string) $upd['info']['version'] : '';
+        $res  = [
+            'site'               => wp_parse_url(home_url(), PHP_URL_HOST),
+            'plugin_version'     => self::VERSION,
+            'update_available'   => ($new !== '' && version_compare($new, self::VERSION, '>')) ? $new : '',
+            'auto_update'        => self::opt('auto_update') === '1',
+            'configured'         => self::configured(),
+            'refresh_minutes'    => self::refresh_minutes(),
+            'last_refresh_ok'    => !empty($st['last_ok']) ? wp_date('c', (int) $st['last_ok']) : '',
+            'last_error'         => (string) ($st['last_error'] ?? ''),
+            'next_run'           => $next ? wp_date('c', (int) $next) : '',
+            'cron_late_minutes'  => $next ? max(0, (int) floor((time() - $next) / 60)) : 0,
+            'wp_cron_disabled'   => defined('DISABLE_WP_CRON') && DISABLE_WP_CRON,
+            'asin_count'         => count((array) get_option(self::OPT_ASINS, [])),
+            'missing_count'      => count($rep['missing']),
+            'deviation_count'    => count($rep['dev']),
+            'last_digest'        => !empty($st['last_digest']) ? wp_date('c', (int) $st['last_digest']) : '',
+            'last_digest_ok'     => isset($st['last_digest_ok']) ? (bool) $st['last_digest_ok'] : null,
+            'wordpress_version'  => get_bloginfo('version'),
+        ];
+        return rest_ensure_response($res);
+    }
+
+    public static function action_regen_key()
+    {
+        self::guard('mcm_prix_regen_key');
+        update_option(self::OPT_KEY, wp_generate_password(32, false, false), false);
+        self::flash('Nouvelle clé générée : l\'ancienne adresse de contrôle ne fonctionne plus.');
+        self::back();
+    }
+
     /** Intervalle d'actualisation réglé (minutes), 30 par défaut. */
     public static function refresh_minutes()
     {
@@ -128,6 +197,9 @@ final class MCM_Prix
 
     public static function ensure_scheduled()
     {
+        if (get_option(self::OPT_KEY, '') === '') {
+            update_option(self::OPT_KEY, wp_generate_password(32, false, false), false);
+        }
         $want = self::refresh_schedule();
         $ev   = function_exists('wp_get_scheduled_event') ? wp_get_scheduled_event(self::CRON_HOOK) : false;
         if (!$ev || $ev->schedule !== $want) {
@@ -1336,6 +1408,15 @@ final class MCM_Prix
                             <p class="description">Vide : l'adresse de l'administrateur du site.</p></td></tr>
                 </table>
                 <?php submit_button('Enregistrer'); ?>
+            </form>
+
+            <h2>Adresse de contrôle</h2>
+            <p>Lecture seule : version du plugin, dernière actualisation, produits à surveiller. Aucun identifiant n'y figure. Gardez l'adresse pour vous : la clé qu'elle contient en est le seul verrou.</p>
+            <p><input type="text" class="large-text code" readonly value="<?php echo esc_attr(self::control_url()); ?>" onfocus="this.select()"></p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="mcm_prix_regen_key">
+                <?php echo $nonce('mcm_prix_regen_key'); ?>
+                <?php submit_button('Générer une nouvelle clé', 'secondary', 'submit', false); ?>
             </form>
 
             <h2>Tester la connexion</h2>

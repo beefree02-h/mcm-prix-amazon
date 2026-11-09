@@ -1,9 +1,9 @@
 {
-  "version": "1.2.4",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.4.zip",
-  "sha256": "4f3904cd76a4b81729f336ca8eef8c56f08cd4e77a4edc63d63c02f868cd8545",
+  "version": "1.2.5",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.5.zip",
+  "sha256": "8f6827f18950729c73585f49b08583e0f2f989e68178316cc3aedc4f53aba5ae",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Intervalle d'actualisation des prix réglable (10, 15, 20, 30, 45 ou 55 minutes ; 30 par défaut). Le changement replanifie la tâche automatiquement."
+  "changelog": "- Adresse de contrôle (lecture seule, protégée par une clé propre à chaque site) : version du plugin, dernière actualisation, retard du cron, produits à surveiller, dernier e-mail de synthèse. Visible dans les réglages, avec un bouton pour changer la clé."
 }

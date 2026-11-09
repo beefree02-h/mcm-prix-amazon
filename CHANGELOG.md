@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.2.5
+- Adresse de contrôle (lecture seule, protégée par une clé propre à chaque site) : version du plugin, dernière actualisation, retard du cron, produits à surveiller, dernier e-mail de synthèse. Visible dans les réglages, avec un bouton pour changer la clé.
+
 ## 1.2.4
 - Intervalle d'actualisation des prix réglable (10, 15, 20, 30, 45 ou 55 minutes ; 30 par défaut). Le changement replanifie la tâche automatiquement.
 

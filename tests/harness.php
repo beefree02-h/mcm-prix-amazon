@@ -60,6 +60,13 @@ function download_url($url, $t = 300) { return $GLOBALS['__dl'] ?? new WP_Error(
 
 function do_action(...$a) {}
 function wp_mail(...$a) { $GLOBALS['__mail'] = $a; return true; }
+function wp_generate_password($n = 12, ...$a) { return substr(str_repeat('abcdef0123456789', 4), 0, $n); }
+function rest_url($p = '') { return 'https://example.test/wp-json/' . $p; }
+function add_query_arg($k, $v, $u) { return $u . '?' . $k . '=' . $v; }
+function home_url() { return 'https://example.test'; }
+function wp_parse_url($u, $c = -1) { return parse_url($u, $c); }
+function rest_ensure_response($x) { return $x; }
+class Fake_Req { public $p; function __construct($p) { $this->p = $p; } function get_param($k) { return $this->p[$k] ?? null; } }
 function get_bloginfo($k) { return 'Mon Choix Malin'; }
 function wp_specialchars_decode($s, $q = 0) { return $s; }
 function admin_url($p = '') { return 'https://example.test/wp-admin/' . $p; }
@@ -257,6 +264,16 @@ check('valeur hors liste (58) ramenée à 30', $san['refresh_min'] === '30');
 $san = MCM_Prix::sanitize_settings(['refresh_min' => '20']);
 check('valeur valide (20) conservée', $san['refresh_min'] === '20');
 $st['refresh_min'] = '30'; update_option('mcm_prix_settings', $st);
+
+// adresse de contrôle
+check('clé de contrôle générée', strlen((string) get_option('mcm_prix_key')) === 32);
+check('adresse de contrôle : sans clé -> refus 404', is_wp_error(MCM_Prix::rest_allowed(new Fake_Req([]))));
+check('adresse de contrôle : mauvaise clé -> refus', is_wp_error(MCM_Prix::rest_allowed(new Fake_Req(['k' => 'faux']))));
+check('adresse de contrôle : bonne clé -> accès', MCM_Prix::rest_allowed(new Fake_Req(['k' => get_option('mcm_prix_key')])) === true);
+$r = MCM_Prix::rest_status(new Fake_Req([]));
+check('adresse de contrôle : version et site', ($r['plugin_version'] ?? '') === MCM_Prix::VERSION && ($r['site'] ?? '') === 'example.test');
+check('adresse de contrôle : aucun secret exposé', strpos(json_encode($r), (string) (get_option('mcm_prix_settings')['client_secret'] ?? 'SECRET_ABSENT')) === false && !isset($r['client_secret']));
+check('adresse de contrôle : URL contient la clé', strpos(MCM_Prix::control_url(), 'k=' . get_option('mcm_prix_key')) !== false);
 
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');
