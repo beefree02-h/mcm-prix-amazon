@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.3
+- Case « Signaler les prix qui s'écartent de la référence » : décochée, plus aucune alerte d'écart de prix (page de réglages, e-mails, bilan). Les produits sans offre restent signalés.
+
 ## 1.3.2
 - Correction du bilan des sites : le site pilote lisait mal son propre état (ligne « ? : v, 0 produits suivis »).
 

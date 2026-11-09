@@ -336,6 +336,17 @@ $meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = 0; $
 MCM_Prix::daily_new_alert();
 check('quotidien : retour à la normale -> oublié', empty(get_option('mcm_prix_status')['notified']));
 
+// alerte d'écart de prix désactivable
+$meta = get_option('mcm_prix_meta'); $meta['B0GHN39ZGJ']['ref'] = 100.0; update_option('mcm_prix_meta', $meta);
+$st = get_option('mcm_prix_settings'); $st['dev_alert'] = '1'; update_option('mcm_prix_settings', $st);
+check('écart de prix : alerte active par défaut', !empty(MCM_Prix::watch_report()['dev']));
+$st['dev_alert'] = '0'; update_option('mcm_prix_settings', $st);
+check('écart de prix désactivé : plus aucun écart signalé', empty(MCM_Prix::watch_report()['dev']));
+$san = MCM_Prix::sanitize_settings(['digest' => '1']);
+check('case écart de prix décochée -> désactivée', $san['dev_alert'] === '0');
+$st['dev_alert'] = '1'; update_option('mcm_prix_settings', $st);
+$meta = get_option('mcm_prix_meta'); $meta['B0GHN39ZGJ']['ref'] = 340.0; update_option('mcm_prix_meta', $meta);
+
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');
 $st['fallback_label'] = 'Consulter l’offre'; $st['details_label'] = 'Détails'; $st['legal_text'] = 'Avis perso sur {boutique}.';

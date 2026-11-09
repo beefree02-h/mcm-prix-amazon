@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.2
+ * Version:     1.3.3
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.2';
+    const VERSION      = '1.3.3';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -243,6 +243,7 @@ final class MCM_Prix
             'refresh_min'    => '30',
             'alert_days'     => '3',
             'deviation_pct'  => '30',
+            'dev_alert'      => '1',
             'alert_email'    => '',
         ];
     }
@@ -756,7 +757,7 @@ final class MCM_Prix
                 $missing[$a] = ['since' => $since, 'err' => (string) ($cache[$a]['err'] ?? ''), 'posts' => self::posts_for($a, $meta)];
             }
             $e = $cache[$a] ?? [];
-            if (!empty($e['offer']) && !empty($m['ref'])) {
+            if (self::opt('dev_alert') === '1' && !empty($e['offer']) && !empty($m['ref'])) {
                 $cur = (float) $e['offer']['amount'];
                 $d   = ($cur - (float) $m['ref']) / (float) $m['ref'] * 100;
                 if (abs($d) >= $pct) {
@@ -1296,6 +1297,7 @@ final class MCM_Prix
         $out['refresh_min']   = (string) (in_array($rm, self::REFRESH_CHOICES, true) ? $rm : 30);
         $out['alert_days']    = (string) min(30, max(1, (int) ($in['alert_days'] ?? 3)));
         $out['deviation_pct'] = (string) min(90, max(5, (int) ($in['deviation_pct'] ?? 30)));
+        $out['dev_alert']     = !empty($in['dev_alert']) ? '1' : '0';
         $mail                 = isset($in['alert_email']) ? sanitize_email($in['alert_email']) : '';
         $out['alert_email']   = is_email($mail) ? $mail : '';
         return $out;
@@ -1649,7 +1651,8 @@ final class MCM_Prix
                     <tr><th><label for="mcm_ad">Produit sans offre</label></th>
                         <td>signalé après <input id="mcm_ad" type="number" min="1" max="30" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[alert_days]" value="<?php echo esc_attr($s['alert_days']); ?>"> jour(s)</td></tr>
                     <tr><th><label for="mcm_dp">Écart de prix</label></th>
-                        <td>signalé à partir de <input id="mcm_dp" type="number" min="5" max="90" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[deviation_pct]" value="<?php echo esc_attr($s['deviation_pct']); ?>"> % par rapport au prix de référence
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[dev_alert]" value="1" <?php checked($s['dev_alert'], '1'); ?>> Signaler les prix qui s'écartent de la référence</label><br>
+                            à partir de <input id="mcm_dp" type="number" min="5" max="90" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[deviation_pct]" value="<?php echo esc_attr($s['deviation_pct']); ?>"> % par rapport au prix de référence
                             <p class="description">Le prix de référence est le premier prix relevé pour chaque produit. Après avoir relu les articles, vous pouvez le remettre à jour avec le bouton plus bas.</p></td></tr>
                     <tr><th><label for="mcm_em">Adresse d'alerte</label></th>
                         <td><input id="mcm_em" class="regular-text" type="email" name="<?php echo self::OPT_SETTINGS; ?>[alert_email]" value="<?php echo esc_attr($s['alert_email']); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
