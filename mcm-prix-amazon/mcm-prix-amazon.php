@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.2
+ * Version:     1.2.3
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.2';
+    const VERSION      = '1.2.3';
     const SLUG         = 'mcm-prix-amazon';
 
     const OPT_SETTINGS = 'mcm_prix_settings';
@@ -63,6 +63,7 @@ final class MCM_Prix
         add_filter('cron_schedules', [__CLASS__, 'cron_schedules']);
         add_action(self::CRON_HOOK, [__CLASS__, 'refresh_all']);
         add_action(self::CRON_DIGEST, [__CLASS__, 'send_digest']);
+        add_action('wp_mail_failed', [__CLASS__, 'on_mail_failed']);
         add_action('init', [__CLASS__, 'ensure_scheduled']);
         add_action('wp_footer', [__CLASS__, 'footer'], 50);
         add_action('save_post', [__CLASS__, 'on_save_post'], 10, 2);
@@ -82,6 +83,7 @@ final class MCM_Prix
             add_action('admin_post_mcm_prix_rescan', [__CLASS__, 'action_rescan']);
             add_action('admin_post_mcm_prix_setref', [__CLASS__, 'action_setref']);
             add_action('admin_post_mcm_prix_check_update', [__CLASS__, 'action_check_update']);
+            add_action('admin_post_mcm_prix_send_digest', [__CLASS__, 'action_send_digest']);
         }
     }
 
@@ -665,17 +667,34 @@ final class MCM_Prix
         return number_format((float) $v, 2, ',', ' ') . ' €';
     }
 
-    /** E-mail hebdomadaire : envoyé seulement s'il y a quelque chose à signaler. */
-    public static function send_digest()
+    /** Mémorise la raison d'un échec d'envoi signalé par WordPress. */
+    public static function on_mail_failed($err)
     {
-        if (self::opt('digest') !== '1' || !self::configured()) {
-            return;
+        if (is_wp_error($err)) {
+            $GLOBALS['mcm_prix_mail_error'] = $err->get_error_message();
+        }
+    }
+
+    /**
+     * E-mail de synthèse. Automatique (lundi) : envoyé seulement s'il y a quelque chose à signaler.
+     * Manuel : envoyé dans tous les cas, pour vérifier que les e-mails arrivent.
+     * Retourne ['sent' => bool, 'to' => adresse, 'error' => texte].
+     */
+    public static function send_digest($manual = false)
+    {
+        $manual = ($manual === true);
+        if (!$manual && (self::opt('digest') !== '1' || !self::configured())) {
+            return ['sent' => false, 'to' => '', 'error' => ''];
         }
         $rep = self::watch_report();
-        if (!$rep['missing'] && !$rep['dev']) {
-            return;
+        if (!$manual && !$rep['missing'] && !$rep['dev']) {
+            return ['sent' => false, 'to' => '', 'error' => ''];
         }
         $lines = [];
+        if ($manual) {
+            $lines[] = 'Envoi manuel de la synthèse Prix Amazon (version ' . self::VERSION . '). Si vous lisez ce message, les e-mails du site arrivent bien.';
+            $lines[] = '';
+        }
         if ($rep['missing']) {
             $lines[] = 'PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
             foreach ($rep['missing'] as $a => $x) {
@@ -696,12 +715,24 @@ final class MCM_Prix
             }
             $lines[] = '';
         }
+        if ($manual && !$rep['missing'] && !$rep['dev']) {
+            $lines[] = 'Aucun produit à surveiller pour le moment.';
+            $lines[] = '';
+        }
         $lines[] = 'Réglages : ' . admin_url('options-general.php?page=mcm-prix');
-        $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
-        wp_mail(self::alert_to(), '[' . $site . '] Prix Amazon : produits à surveiller', implode("\n", $lines));
-        $status                = (array) get_option(self::OPT_STATUS, []);
-        $status['last_digest'] = time();
+        $site    = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+        $to      = self::alert_to();
+        $subject = '[' . $site . '] Prix Amazon : ' . ($manual ? 'synthèse (envoi manuel)' : 'produits à surveiller');
+        unset($GLOBALS['mcm_prix_mail_error']);
+        $ok     = (bool) wp_mail($to, $subject, implode("\n", $lines));
+        $err    = $ok ? '' : (string) ($GLOBALS['mcm_prix_mail_error'] ?? 'le serveur d\'envoi a refusé le message');
+        $status = (array) get_option(self::OPT_STATUS, []);
+        $status['last_digest']     = time();
+        $status['last_digest_ok']  = $ok ? 1 : 0;
+        $status['last_digest_to']  = $to;
+        $status['last_digest_err'] = $err;
         update_option(self::OPT_STATUS, $status, false);
+        return ['sent' => $ok, 'to' => $to, 'error' => $err];
     }
 
     /* ------------------------------------------------------------------ */
@@ -1052,6 +1083,18 @@ final class MCM_Prix
         self::back();
     }
 
+    public static function action_send_digest()
+    {
+        self::guard('mcm_prix_send_digest');
+        $r = self::send_digest(true);
+        if ($r['sent']) {
+            self::flash('Synthèse envoyée à ' . $r['to'] . '. Le serveur d\'envoi l\'a acceptée ; si elle n\'arrive pas, regardez le courrier indésirable et la boîte de l\'adresse d\'expéditeur (un message d\'échec de livraison peut y revenir).');
+        } else {
+            self::flash('Envoi impossible vers ' . $r['to'] . ' : ' . $r['error'], 'error');
+        }
+        self::back();
+    }
+
     public static function action_check_update()
     {
         self::guard('mcm_prix_check_update');
@@ -1173,7 +1216,12 @@ final class MCM_Prix
                         echo ' <span class="description">(pas encore vérifié)</span>';
                     endif; ?>
                     — mise à jour automatique : <?php echo $s['auto_update'] === '1' ? 'activée' : 'désactivée'; ?></td></tr>
-                <tr><th>Dernier e-mail de synthèse</th><td><?php echo $fmt($st['last_digest'] ?? 0); ?></td></tr>
+                <tr><th>Dernier e-mail de synthèse</th><td><?php echo $fmt($st['last_digest'] ?? 0);
+                    if (!empty($st['last_digest']) && !empty($st['last_digest_ok'])) {
+                        echo ' — accepté par le serveur d\'envoi pour ' . esc_html((string) ($st['last_digest_to'] ?? '')) . ' <span class="description">(ne garantit pas la réception)</span>';
+                    } elseif (!empty($st['last_digest']) && isset($st['last_digest_ok'])) {
+                        echo ' — <span style="color:#b32d2e">échec : ' . esc_html((string) ($st['last_digest_err'] ?? '')) . '</span>';
+                    } ?></td></tr>
             </table>
             <p>
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline">
@@ -1190,6 +1238,11 @@ final class MCM_Prix
                     <input type="hidden" name="action" value="mcm_prix_check_update">
                     <?php echo $nonce('mcm_prix_check_update'); ?>
                     <?php submit_button('Vérifier les mises à jour', 'secondary', 'submit', false); ?>
+                </form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline;margin-left:8px">
+                    <input type="hidden" name="action" value="mcm_prix_send_digest">
+                    <?php echo $nonce('mcm_prix_send_digest'); ?>
+                    <?php submit_button('Envoyer la synthèse maintenant', 'secondary', 'submit', false); ?>
                 </form>
             </p>
 

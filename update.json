@@ -1,9 +1,9 @@
 {
-  "version": "1.2.2",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.2.zip",
-  "sha256": "f6ac25651c17466a06d87b9cc98784b32189dd0885bd49660bffca4c3a7ca230",
+  "version": "1.2.3",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.3.zip",
+  "sha256": "284c2f6d5443bc1d50269206a1bc933400320b41ef13202fdaf3928b0717fa87",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Tableau « Prix suivis » : l'icône vers l'article en ligne reste visible même quand le titre est tronqué ; la date de relevé tient sur une seule ligne."
+  "changelog": "- Bouton « Envoyer la synthèse maintenant » : envoi immédiat à l'adresse d'alerte, même sans alerte, pour tester la réception.\n- Le résultat de l'envoi (accepté ou refusé par le serveur d'envoi, destinataire, motif) est enregistré et affiché dans l'état du plugin."
 }

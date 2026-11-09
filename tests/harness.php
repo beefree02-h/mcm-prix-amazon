@@ -234,6 +234,16 @@ $meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = 0; u
 unset($GLOBALS['__mail']); MCM_Prix::send_digest();
 check('rien à signaler : aucun e-mail', !isset($GLOBALS['__mail']));
 
+// envoi manuel : part même sans rien à signaler, même si la synthèse automatique est désactivée
+$st = get_option('mcm_prix_settings'); $st['digest'] = '0'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); $r = MCM_Prix::send_digest(true);
+check('envoi manuel : e-mail parti sans alerte ni case cochée', isset($GLOBALS['__mail']) && $r['sent'] === true && strpos($GLOBALS['__mail'][1], 'envoi manuel') !== false && strpos($GLOBALS['__mail'][2], 'Aucun produit à surveiller') !== false);
+$s2 = get_option('mcm_prix_status');
+check('envoi manuel : résultat enregistré', ($s2['last_digest_ok'] ?? null) === 1 && ($s2['last_digest_to'] ?? '') === 'alerte@example.test');
+$st['digest'] = '1'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); MCM_Prix::send_digest();
+check('envoi automatique : toujours rien sans alerte', !isset($GLOBALS['__mail']));
+
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');
 $st['fallback_label'] = 'Consulter l’offre'; $st['details_label'] = 'Détails'; $st['legal_text'] = 'Avis perso sur {boutique}.';

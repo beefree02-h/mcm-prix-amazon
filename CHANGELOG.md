@@ -1,5 +1,9 @@
 # Journal des versions
 
+## 1.2.3
+- Bouton « Envoyer la synthèse maintenant » : envoi immédiat à l'adresse d'alerte, même sans alerte, pour tester la réception.
+- Le résultat de l'envoi (accepté ou refusé par le serveur d'envoi, destinataire, motif) est enregistré et affiché dans l'état du plugin.
+
 ## 1.2.2
 - Tableau « Prix suivis » : l'icône vers l'article en ligne reste visible même quand le titre est tronqué ; la date de relevé tient sur une seule ligne.
 
