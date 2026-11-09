@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.6
+- E-mails : pastilles de couleur (🔴 produit sans offre ou problème grave, 🟠 écart de prix ou point à relire, 🟢 site en ordre) dans la synthèse, l'alerte quotidienne et le bilan des sites.
+
 ## 1.3.5
 - Tableau « Prix suivis » : tout produit sans offre est en rouge (ligne teintée et pastille « Problème »), même quand il ne l'est que depuis quelques heures.
 

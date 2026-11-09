@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.5
+ * Version:     1.3.6
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.5';
+    const VERSION      = '1.3.6';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -808,42 +808,46 @@ final class MCM_Prix
     private static function overview_lines(array $d)
     {
         $host  = $d['site'] ?? '?';
-        $warns = [];
+        $red   = []; // problèmes graves
+        $orange = []; // à relire / à faire
         if (version_compare((string) $d['plugin_version'], self::VERSION, '<')) {
-            $warns[] = 'version plus ancienne que celle du site pilote';
+            $orange[] = 'version plus ancienne que celle du site pilote';
         }
         if (!empty($d['update_available'])) {
-            $warns[] = 'mise à jour ' . $d['update_available'] . ' disponible';
+            $orange[] = 'mise à jour ' . $d['update_available'] . ' disponible';
         }
         if (empty($d['configured'])) {
-            $warns[] = 'identifiants API non renseignés';
+            $red[] = 'identifiants API non renseignés';
         }
         $ok = !empty($d['last_refresh_ok']) ? strtotime($d['last_refresh_ok']) : 0;
         if (!$ok || (time() - $ok) > 2 * HOUR_IN_SECONDS) {
-            $warns[] = 'dernière actualisation trop ancienne' . ($ok ? ' (' . human_time_diff($ok) . ')' : '');
+            $red[] = 'dernière actualisation trop ancienne' . ($ok ? ' (' . human_time_diff($ok) . ')' : '');
         }
         if (!empty($d['last_error'])) {
-            $warns[] = 'erreur : ' . $d['last_error'];
+            $red[] = 'erreur : ' . $d['last_error'];
         }
         if ((int) ($d['cron_late_minutes'] ?? 0) > 15) {
-            $warns[] = 'cron en retard de ' . (int) $d['cron_late_minutes'] . ' min';
+            $red[] = 'cron en retard de ' . (int) $d['cron_late_minutes'] . ' min';
         }
         if (!empty($d['wp_cron_disabled'])) {
-            $warns[] = 'WP-Cron désactivé';
+            $orange[] = 'WP-Cron désactivé';
         }
         if (isset($d['last_digest_ok']) && $d['last_digest_ok'] === false) {
-            $warns[] = 'dernier e-mail de synthèse refusé';
+            $red[] = 'dernier e-mail de synthèse refusé';
         }
         if ((int) ($d['missing_count'] ?? 0) > 0) {
-            $warns[] = (int) $d['missing_count'] . ' produit(s) sans offre';
+            $red[] = (int) $d['missing_count'] . ' produit(s) sans offre';
         }
         if ((int) ($d['deviation_count'] ?? 0) > 0) {
-            $warns[] = (int) $d['deviation_count'] . ' écart(s) de prix';
+            $orange[] = (int) $d['deviation_count'] . ' écart(s) de prix';
         }
-        $tag   = $warns ? 'À VOIR' : 'OK';
+        $tag   = $red ? '🔴 À VOIR' : ($orange ? '🟠 À VOIR' : '🟢 OK');
         $lines = [$tag . ' — ' . $host . ' : v' . $d['plugin_version'] . ', ' . (int) ($d['asin_count'] ?? 0) . ' produits suivis, actualisation toutes les ' . (int) ($d['refresh_minutes'] ?? 30) . ' min'];
-        foreach ($warns as $w) {
-            $lines[] = '    - ' . $w;
+        foreach ($red as $w) {
+            $lines[] = '    🔴 ' . $w;
+        }
+        foreach ($orange as $w) {
+            $lines[] = '    🟠 ' . $w;
         }
         return $lines;
     }
@@ -862,7 +866,7 @@ final class MCM_Prix
         $own   = self::status_data();
         $block = self::overview_lines($own);
         $lines = array_merge($lines, $block);
-        $flag += (strpos($block[0], 'À VOIR') === 0) ? 1 : 0;
+        $flag += (strpos($block[0], 'À VOIR') !== false) ? 1 : 0;
         foreach (preg_split('/\R+/', (string) self::opt('pilot_urls')) as $u) {
             $u = trim($u);
             if ($u === '') {
@@ -871,13 +875,13 @@ final class MCM_Prix
             $d = self::fetch_remote_status($u);
             if (isset($d['error'])) {
                 $host   = wp_parse_url($u, PHP_URL_HOST);
-                $lines[] = 'À VOIR — ' . $host . ' : injoignable (' . $d['error'] . ')';
+                $lines[] = '🔴 À VOIR — ' . $host . ' : injoignable (' . $d['error'] . ')';
                 $flag++;
                 continue;
             }
             $block = self::overview_lines($d);
             $lines = array_merge($lines, $block);
-            $flag += (strpos($block[0], 'À VOIR') === 0) ? 1 : 0;
+            $flag += (strpos($block[0], 'À VOIR') !== false) ? 1 : 0;
         }
         $lines[] = '';
         $lines[] = 'Ce bilan est envoyé chaque lundi par le site pilote, même sans alerte.';
@@ -926,9 +930,9 @@ final class MCM_Prix
     {
         $lines = [];
         if ($rep['missing']) {
-            $lines[] = 'PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
+            $lines[] = '🔴 PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
             foreach ($rep['missing'] as $a => $x) {
-                $lines[] = '- ' . $a . ' : sans offre depuis ' . human_time_diff($x['since']) . ($x['err'] !== '' ? ' (' . $x['err'] . ')' : '');
+                $lines[] = '🔴 ' . $a . ' : sans offre depuis ' . human_time_diff($x['since']) . ($x['err'] !== '' ? ' (' . $x['err'] . ')' : '');
                 foreach ($x['posts'] as $p) {
                     $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
                 }
@@ -936,9 +940,9 @@ final class MCM_Prix
             $lines[] = '';
         }
         if ($rep['dev']) {
-            $lines[] = 'PRIX QUI S\'ÉCARTENT DE LA RÉFÉRENCE (relire le texte de l\'article) :';
+            $lines[] = '🟠 PRIX QUI S\'ÉCARTENT DE LA RÉFÉRENCE (relire le texte de l\'article) :';
             foreach ($rep['dev'] as $a => $x) {
-                $lines[] = '- ' . $a . ' : ' . self::money($x['ref']) . ' → ' . self::money($x['cur']) . ' (' . ($x['pct'] > 0 ? '+' : '') . round($x['pct']) . ' %)';
+                $lines[] = '🟠 ' . $a . ' : ' . self::money($x['ref']) . ' → ' . self::money($x['cur']) . ' (' . ($x['pct'] > 0 ? '+' : '') . round($x['pct']) . ' %)';
                 foreach ($x['posts'] as $p) {
                     $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
                 }

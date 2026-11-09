@@ -230,6 +230,7 @@ check('article lié à l\'ASIN sans offre', ($rep['missing']['B0GQVBWMN8']['post
 // --- 8. E-mail de synthèse ---------------------------------------------------------------
 unset($GLOBALS['__mail']);
 MCM_Prix::send_digest();
+check('synthèse : pastille rouge sur le produit sans offre', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], '🔴 B0GQVBWMN8') !== false);
 check('synthèse envoyée (produit sans offre)', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'B0GQVBWMN8') !== false && strpos($GLOBALS['__mail'][2], 'Titre 42') !== false);
 check('synthèse : destinataire = administrateur par défaut', ($GLOBALS['__mail'][0] ?? '') === 'admin@example.test');
 $st = get_option('mcm_prix_settings'); $st['alert_email'] = 'alerte@example.test'; update_option('mcm_prix_settings', $st);
@@ -300,10 +301,12 @@ $r = MCM_Prix::send_overview(true);
 check('pilote : bilan envoyé même sans alerte sur les sites OK', $r['sent'] === true && isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'OK — a.test') !== false);
 check('pilote : site injoignable signalé', strpos($GLOBALS['__mail'][2], 'À VOIR — b.test : injoignable') !== false && strpos($GLOBALS['__mail'][1], 'à voir') !== false);
 check('pilote : le site pilote figure lui-même dans le bilan', strpos($GLOBALS['__mail'][2], 'example.test : v' . MCM_Prix::VERSION) !== false);
+check('pilote : pastilles (vert OK, rouge injoignable)', strpos($GLOBALS['__mail'][2], '🟢 OK — a.test') !== false && strpos($GLOBALS['__mail'][2], '🔴 À VOIR — b.test') !== false);
 check('pilote : aucune clé dans le bilan', strpos($GLOBALS['__mail'][2], 'AAA') === false && strpos($GLOBALS['__mail'][2], 'BBB') === false);
 $old = $ok1; $old['plugin_version'] = '1.0.0'; $old['cron_late_minutes'] = 40; $old['missing_count'] = 2;
 $GLOBALS['__http_get'] = [['code' => 200, 'body' => json_encode($old)], ['code' => 200, 'body' => json_encode($ok1)]];
 unset($GLOBALS['__mail']); MCM_Prix::send_overview();
+check('pilote : sans offre en rouge, version ancienne en orange', strpos($GLOBALS['__mail'][2], '🔴 2 produit(s) sans offre') !== false && strpos($GLOBALS['__mail'][2], '🟠 version plus ancienne') !== false);
 check('pilote : version ancienne, cron en retard, sans offre', strpos($GLOBALS['__mail'][2], 'plus ancienne') !== false && strpos($GLOBALS['__mail'][2], 'cron en retard de 40') !== false && strpos($GLOBALS['__mail'][2], '2 produit(s) sans offre') !== false);
 $st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
 unset($GLOBALS['__mail']); $r = MCM_Prix::send_overview();
