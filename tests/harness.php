@@ -461,7 +461,7 @@ $now = time();
 check('état : pas encore relevé', MCM_Prix::suivi_state([], [], 3) === 'new');
 check('état : offre récente = à jour', MCM_Prix::suivi_state(['ts' => $now, 'offer' => ['amount' => 10]], [], 3) === 'ok');
 check('état : offre périmée = à surveiller', MCM_Prix::suivi_state(['ts' => $now - 7200, 'offer' => ['amount' => 10]], [], 3) === 'watch');
-check('état : sans offre depuis peu = à surveiller', MCM_Prix::suivi_state(['ts' => $now], ['missing_since' => $now - 3600], 3) === 'watch');
+check('état : sans offre depuis peu = problème (rouge)', MCM_Prix::suivi_state(['ts' => $now], ['missing_since' => $now - 3600], 3) === 'problem');
 check('état : sans offre depuis 3 jours = problème', MCM_Prix::suivi_state(['ts' => $now], ['missing_since' => $now - 4 * 86400], 3) === 'problem');
 check('état : erreur API (ItemNotAccessible) = problème', MCM_Prix::suivi_state(['ts' => $now, 'err' => 'ItemNotAccessible'], [], 3) === 'problem');
 check('état : un gros écart de prix reste « à jour »', MCM_Prix::suivi_state(['ts' => $now, 'offer' => ['amount' => 379.99]], ['ref' => 100.0], 3) === 'ok');

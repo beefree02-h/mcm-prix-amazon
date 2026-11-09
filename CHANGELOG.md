@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.5
+- Tableau « Prix suivis » : tout produit sans offre est en rouge (ligne teintée et pastille « Problème »), même quand il ne l'est que depuis quelques heures.
+
 ## 1.3.4
 - Réglages séparés : « E-mail de synthèse » (lundi) et « Alerte de nouveaux problèmes » (quotidienne, au plus un e-mail par jour). Décocher l'un ne coupe plus l'autre.
 

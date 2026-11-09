@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.4
+ * Version:     1.3.5
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.4';
+    const VERSION      = '1.3.5';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -701,11 +701,7 @@ final class MCM_Prix
             return 'new';
         }
         if (empty($e['offer'])) {
-            $since = (int) ($m['missing_since'] ?? 0);
-            if (!empty($e['err']) || ($since && (time() - $since) >= max(1, (int) $days) * DAY_IN_SECONDS)) {
-                return 'problem';
-            }
-            return 'watch';
+            return 'problem'; // tout produit sans offre est en rouge, quelle que soit la durée
         }
         return $age < self::FRESH_MAX ? 'ok' : 'watch';
     }
@@ -1736,6 +1732,7 @@ final class MCM_Prix
                     .mcm-prix-suivis th[data-col]::after { content: ' \2195'; opacity: .35; }
                     .mcm-prix-suivis th[aria-sort="ascending"]::after { content: ' \25B2'; opacity: 1; }
                     .mcm-prix-suivis th[aria-sort="descending"]::after { content: ' \25BC'; opacity: 1; }
+                    .mcm-prix-suivis tr.mcm-e-problem td { background: #fcf0f1; }
                     .mcm-prix-suivis tr.mcm-e-problem td:first-child { box-shadow: inset 4px 0 0 #d63638; }
                     .mcm-prix-suivis tr.mcm-e-watch td:first-child { box-shadow: inset 4px 0 0 #dba617; }
                     .mcm-prix-suivis tr.mcm-e-ok td:first-child { box-shadow: inset 4px 0 0 #00a32a; }

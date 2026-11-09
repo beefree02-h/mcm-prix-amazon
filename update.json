@@ -1,9 +1,9 @@
 {
-  "version": "1.3.4",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.3.4.zip",
-  "sha256": "8e3984ed7afe26c483ebf2c79ce6e7213431e82a4fb03db0e6136399a0ef8ff0",
+  "version": "1.3.5",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.3.5.zip",
+  "sha256": "ca95e3fef92bce2b7fac0ff77ab1ae89546896cd34975bdd45b8201dac883395",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Réglages séparés : « E-mail de synthèse » (lundi) et « Alerte de nouveaux problèmes » (quotidienne, au plus un e-mail par jour). Décocher l'un ne coupe plus l'autre."
+  "changelog": "- Tableau « Prix suivis » : tout produit sans offre est en rouge (ligne teintée et pastille « Problème »), même quand il ne l'est que depuis quelques heures."
 }
