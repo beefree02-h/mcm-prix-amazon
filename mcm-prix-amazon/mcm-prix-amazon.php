@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.2.3
+ * Version:     1.2.4
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,8 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.2.3';
+    const VERSION      = '1.2.4';
+    const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
     const OPT_SETTINGS = 'mcm_prix_settings';
@@ -100,10 +101,12 @@ final class MCM_Prix
 
     public static function cron_schedules($schedules)
     {
-        $schedules['mcm_prix_30min'] = [
-            'interval' => 1800,
-            'display'  => 'Toutes les 30 minutes (Prix Amazon)',
-        ];
+        foreach (self::REFRESH_CHOICES as $m) {
+            $schedules['mcm_prix_' . $m . 'min'] = [
+                'interval' => $m * 60,
+                'display'  => 'Toutes les ' . $m . ' minutes (Prix Amazon)',
+            ];
+        }
         $schedules['mcm_prix_weekly'] = [
             'interval' => 7 * DAY_IN_SECONDS,
             'display'  => 'Une fois par semaine (Prix Amazon)',
@@ -111,10 +114,26 @@ final class MCM_Prix
         return $schedules;
     }
 
+    /** Intervalle d'actualisation réglé (minutes), 30 par défaut. */
+    public static function refresh_minutes()
+    {
+        $m = (int) self::opt('refresh_min');
+        return in_array($m, self::REFRESH_CHOICES, true) ? $m : 30;
+    }
+
+    private static function refresh_schedule()
+    {
+        return 'mcm_prix_' . self::refresh_minutes() . 'min';
+    }
+
     public static function ensure_scheduled()
     {
-        if (!wp_next_scheduled(self::CRON_HOOK)) {
-            wp_schedule_event(time() + 60, 'mcm_prix_30min', self::CRON_HOOK);
+        $want = self::refresh_schedule();
+        $ev   = function_exists('wp_get_scheduled_event') ? wp_get_scheduled_event(self::CRON_HOOK) : false;
+        if (!$ev || $ev->schedule !== $want) {
+            // pas encore planifié, ou l'intervalle réglé a changé : on replanifie
+            wp_clear_scheduled_hook(self::CRON_HOOK);
+            wp_schedule_event(time() + 60, $want, self::CRON_HOOK);
         }
         if (!wp_next_scheduled(self::CRON_DIGEST)) {
             wp_schedule_event(strtotime('next monday 07:00'), 'mcm_prix_weekly', self::CRON_DIGEST);
@@ -139,6 +158,7 @@ final class MCM_Prix
             'legal_text'     => '',
             'auto_update'    => '1',
             'digest'         => '1',
+            'refresh_min'    => '30',
             'alert_days'     => '3',
             'deviation_pct'  => '30',
             'alert_email'    => '',
@@ -964,6 +984,8 @@ final class MCM_Prix
 
         $out['auto_update']   = !empty($in['auto_update']) ? '1' : '0';
         $out['digest']        = !empty($in['digest']) ? '1' : '0';
+        $rm                   = (int) ($in['refresh_min'] ?? 30);
+        $out['refresh_min']   = (string) (in_array($rm, self::REFRESH_CHOICES, true) ? $rm : 30);
         $out['alert_days']    = (string) min(30, max(1, (int) ($in['alert_days'] ?? 3)));
         $out['deviation_pct'] = (string) min(90, max(5, (int) ($in['deviation_pct'] ?? 30)));
         $mail                 = isset($in['alert_email']) ? sanitize_email($in['alert_email']) : '';
@@ -1295,6 +1317,13 @@ final class MCM_Prix
                     <tr><th>Mises à jour automatiques</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[auto_update]" value="1" <?php checked($s['auto_update'], '1'); ?>> Installer automatiquement les nouvelles versions du plugin (depuis GitHub)</label>
                             <p class="description">Le paquet est vérifié (empreinte SHA-256) avant installation. Vous gardez la main depuis la page Extensions.</p></td></tr>
+                    <tr><th><label for="mcm_rm">Actualisation des prix</label></th>
+                        <td>toutes les <select id="mcm_rm" name="<?php echo self::OPT_SETTINGS; ?>[refresh_min]">
+                            <?php foreach (self::REFRESH_CHOICES as $m) : ?>
+                                <option value="<?php echo (int) $m; ?>" <?php selected((int) $s['refresh_min'], $m); ?>><?php echo (int) $m; ?></option>
+                            <?php endforeach; ?>
+                            </select> minutes
+                            <p class="description">Un prix reste affiché 1 heure au plus, puis le lien de repli prend le relais. Plus l'intervalle est long, moins il reste de marge si WP-Cron prend du retard (site peu visité) : au-delà de 45 minutes, un petit retard suffit à faire basculer des prix sur le lien de repli. 30 minutes est un bon équilibre.</p></td></tr>
                     <tr><th>E-mail de synthèse</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[digest]" value="1" <?php checked($s['digest'], '1'); ?>> Envoyer chaque lundi les produits à surveiller (seulement s'il y en a)</label></td></tr>
                     <tr><th><label for="mcm_ad">Produit sans offre</label></th>

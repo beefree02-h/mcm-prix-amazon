@@ -33,7 +33,7 @@ function esc_url($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8')
 function wp_date($f, $t = null) { $t = $t ?? time(); $d = new DateTime('@' . $t); $d->setTimezone(new DateTimeZone('Europe/Paris')); return $d->format($f); }
 function shortcode_atts($d, $a, $s = '') { return array_merge($d, array_intersect_key((array) $a, $d)); }
 function current_user_can($c) { return true; }
-function wp_next_scheduled($h) { return false; } function wp_schedule_event(...$a) {}
+function wp_next_scheduled($h) { return false; } function wp_schedule_event(...$a) { $GLOBALS['__sched'][] = $a; } function wp_clear_scheduled_hook(...$a) {}
 function wp_remote_post($url, $args) {
     $GLOBALS['__calls'][] = ['url' => $url, 'args' => $args];
     $r = array_shift($GLOBALS['__http']);
@@ -243,6 +243,20 @@ check('envoi manuel : résultat enregistré', ($s2['last_digest_ok'] ?? null) ==
 $st['digest'] = '1'; update_option('mcm_prix_settings', $st);
 unset($GLOBALS['__mail']); MCM_Prix::send_digest();
 check('envoi automatique : toujours rien sans alerte', !isset($GLOBALS['__mail']));
+
+// intervalle d'actualisation réglable
+check('intervalle par défaut : 30 minutes', MCM_Prix::refresh_minutes() === 30);
+$sch = MCM_Prix::cron_schedules([]);
+check('intervalles déclarés (10 à 55 min)', ($sch['mcm_prix_30min']['interval'] ?? 0) === 1800 && ($sch['mcm_prix_55min']['interval'] ?? 0) === 3300 && isset($sch['mcm_prix_10min']));
+$st = get_option('mcm_prix_settings'); $st['refresh_min'] = '45'; update_option('mcm_prix_settings', $st);
+check('intervalle réglé à 45 minutes', MCM_Prix::refresh_minutes() === 45);
+$GLOBALS['__sched'] = []; MCM_Prix::ensure_scheduled();
+check('replanification au bon intervalle', ($GLOBALS['__sched'][0][1] ?? '') === 'mcm_prix_45min');
+$san = MCM_Prix::sanitize_settings(['refresh_min' => '58']);
+check('valeur hors liste (58) ramenée à 30', $san['refresh_min'] === '30');
+$san = MCM_Prix::sanitize_settings(['refresh_min' => '20']);
+check('valeur valide (20) conservée', $san['refresh_min'] === '20');
+$st['refresh_min'] = '30'; update_option('mcm_prix_settings', $st);
 
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');

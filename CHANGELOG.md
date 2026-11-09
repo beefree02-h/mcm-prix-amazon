@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.2.4
+- Intervalle d'actualisation des prix réglable (10, 15, 20, 30, 45 ou 55 minutes ; 30 par défaut). Le changement replanifie la tâche automatiquement.
+
 ## 1.2.3
 - Bouton « Envoyer la synthèse maintenant » : envoi immédiat à l'adresse d'alerte, même sans alerte, pour tester la réception.
 - Le résultat de l'envoi (accepté ou refusé par le serveur d'envoi, destinataire, motif) est enregistré et affiché dans l'état du plugin.

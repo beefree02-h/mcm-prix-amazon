@@ -1,9 +1,9 @@
 {
-  "version": "1.2.3",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.3.zip",
-  "sha256": "284c2f6d5443bc1d50269206a1bc933400320b41ef13202fdaf3928b0717fa87",
+  "version": "1.2.4",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.2.4.zip",
+  "sha256": "4f3904cd76a4b81729f336ca8eef8c56f08cd4e77a4edc63d63c02f868cd8545",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- Bouton « Envoyer la synthèse maintenant » : envoi immédiat à l'adresse d'alerte, même sans alerte, pour tester la réception.\n- Le résultat de l'envoi (accepté ou refusé par le serveur d'envoi, destinataire, motif) est enregistré et affiché dans l'état du plugin."
+  "changelog": "- Intervalle d'actualisation des prix réglable (10, 15, 20, 30, 45 ou 55 minutes ; 30 par défaut). Le changement replanifie la tâche automatiquement."
 }
