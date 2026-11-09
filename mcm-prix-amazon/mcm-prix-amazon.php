@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.3
+ * Version:     1.3.4
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.3';
+    const VERSION      = '1.3.4';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -238,6 +238,7 @@ final class MCM_Prix
             'legal_text'     => '',
             'auto_update'    => '1',
             'digest'         => '1',
+            'new_alert'      => '1',
             'pilot'          => '0',
             'pilot_urls'     => '',
             'refresh_min'    => '30',
@@ -957,7 +958,7 @@ final class MCM_Prix
      */
     public static function daily_new_alert()
     {
-        if (self::opt('digest') !== '1' || !self::configured()) {
+        if (self::opt('new_alert') !== '1' || !self::configured()) {
             return;
         }
         $rep      = self::watch_report();
@@ -1279,6 +1280,7 @@ final class MCM_Prix
 
         $out['auto_update']   = !empty($in['auto_update']) ? '1' : '0';
         $out['digest']        = !empty($in['digest']) ? '1' : '0';
+        $out['new_alert']     = !empty($in['new_alert']) ? '1' : '0';
         $out['pilot']         = !empty($in['pilot']) ? '1' : '0';
         // adresses de contrôle des autres sites : une par ligne, https uniquement, 10 au plus
         if (isset($in['pilot_urls'])) {
@@ -1648,6 +1650,8 @@ final class MCM_Prix
                             <p class="description">Ces adresses contiennent des clés en lecture seule : elles ne donnent accès à aucun identifiant Amazon.</p></td></tr>
                     <tr><th>E-mail de synthèse</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[digest]" value="1" <?php checked($s['digest'], '1'); ?>> Envoyer chaque lundi les produits à surveiller (seulement s'il y en a)</label></td></tr>
+                    <tr><th>Alerte de nouveaux problèmes</th>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[new_alert]" value="1" <?php checked($s['new_alert'], '1'); ?>> Envoyer un e-mail dès qu'un nouveau produit passe le seuil (au plus un par jour, seulement s'il y a du nouveau)</label></td></tr>
                     <tr><th><label for="mcm_ad">Produit sans offre</label></th>
                         <td>signalé après <input id="mcm_ad" type="number" min="1" max="30" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[alert_days]" value="<?php echo esc_attr($s['alert_days']); ?>"> jour(s)</td></tr>
                     <tr><th><label for="mcm_dp">Écart de prix</label></th>

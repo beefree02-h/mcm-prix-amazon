@@ -314,7 +314,7 @@ check('lundi : synthèse + bilan partent', isset($GLOBALS['__mail']));
 $st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
 
 // alerte quotidienne : seulement les nouveaux problèmes, au plus un e-mail par jour
-$st = get_option('mcm_prix_settings'); $st['digest'] = '1'; $st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
+$st = get_option('mcm_prix_settings'); $st['digest'] = '1'; $st['new_alert'] = '1'; $st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
 $stt = get_option('mcm_prix_status'); unset($stt['notified'], $stt['last_new_alert']); update_option('mcm_prix_status', $stt);
 $meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = time() - 5 * 86400; $meta['B0GHN39ZGJ']['missing_since'] = 0; update_option('mcm_prix_meta', $meta);
 unset($GLOBALS['__mail']); MCM_Prix::daily_new_alert();
@@ -327,10 +327,15 @@ check('quotidien : un autre nouveau produit mais moins de 24 h -> attend', !isse
 $stt = get_option('mcm_prix_status'); $stt['last_new_alert'] = time() - 25 * 3600; update_option('mcm_prix_status', $stt);
 unset($GLOBALS['__mail']); MCM_Prix::daily_new_alert();
 check('quotidien : après 24 h, seul le nouveau produit est signalé', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'B0GHN39ZGJ') !== false && strpos($GLOBALS['__mail'][2], 'B0GQVBWMN8') === false);
-$st['digest'] = '0'; update_option('mcm_prix_settings', $st);
+$st['new_alert'] = '0'; update_option('mcm_prix_settings', $st);
 $stt = get_option('mcm_prix_status'); unset($stt['notified']); $stt['last_new_alert'] = 0; update_option('mcm_prix_status', $stt);
 unset($GLOBALS['__mail']); MCM_Prix::daily_new_alert();
-check('quotidien : synthèse désactivée -> aucun e-mail', !isset($GLOBALS['__mail']));
+check('quotidien : alerte désactivée -> aucun e-mail', !isset($GLOBALS['__mail']));
+$st['new_alert'] = '1'; $st['digest'] = '0'; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__mail']); MCM_Prix::daily_new_alert();
+check('quotidien : indépendant de la synthèse du lundi (désactivée)', isset($GLOBALS['__mail']));
+unset($GLOBALS['__mail']); MCM_Prix::send_digest();
+check('synthèse du lundi désactivée : aucun e-mail du lundi', !isset($GLOBALS['__mail']));
 $st['digest'] = '1'; update_option('mcm_prix_settings', $st);
 $meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = 0; $meta['B0GHN39ZGJ']['missing_since'] = 0; update_option('mcm_prix_meta', $meta);
 MCM_Prix::daily_new_alert();

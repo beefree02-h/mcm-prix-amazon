@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.3.4
+- Réglages séparés : « E-mail de synthèse » (lundi) et « Alerte de nouveaux problèmes » (quotidienne, au plus un e-mail par jour). Décocher l'un ne coupe plus l'autre.
+
 ## 1.3.3
 - Case « Signaler les prix qui s'écartent de la référence » : décochée, plus aucune alerte d'écart de prix (page de réglages, e-mails, bilan). Les produits sans offre restent signalés.
 
