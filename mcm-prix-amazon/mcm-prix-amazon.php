@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.3.6
+ * Version:     1.4.0
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.3.6';
+    const VERSION      = '1.4.0';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -28,6 +28,8 @@ final class MCM_Prix
     const OPT_API      = 'mcm_prix_api';     // compteur de requêtes du jour
     const CRON_HOOK    = 'mcm_prix_refresh';
     const CRON_DIGEST  = 'mcm_prix_digest';
+    const CRON_PILOT   = 'mcm_prix_pilot';   // alerte quotidienne centralisée (site pilote)
+    const OPT_PILOT    = 'mcm_prix_pilot_state';
     const LOCK         = 'mcm_prix_lock';
     const UPD_CACHE    = 'mcm_prix_upd';
     const OPT_KEY      = 'mcm_prix_key';     // clé de l'adresse de contrôle
@@ -65,6 +67,7 @@ final class MCM_Prix
         add_filter('cron_schedules', [__CLASS__, 'cron_schedules']);
         add_action(self::CRON_HOOK, [__CLASS__, 'refresh_all']);
         add_action(self::CRON_DIGEST, [__CLASS__, 'cron_weekly']);
+        add_action(self::CRON_PILOT, [__CLASS__, 'pilot_daily_alert']);
         add_action('rest_api_init', [__CLASS__, 'register_rest']);
         add_action('shutdown', [__CLASS__, 'stall_check']);
         add_action('wp_mail_failed', [__CLASS__, 'on_mail_failed']);
@@ -102,6 +105,7 @@ final class MCM_Prix
     {
         wp_clear_scheduled_hook(self::CRON_HOOK);
         wp_clear_scheduled_hook(self::CRON_DIGEST);
+        wp_clear_scheduled_hook(self::CRON_PILOT);
     }
 
     public static function cron_schedules($schedules)
@@ -153,6 +157,29 @@ final class MCM_Prix
         return rest_ensure_response(self::status_data());
     }
 
+    /** Détail (ASIN, articles) des produits à surveiller, pour la lecture à distance par le site pilote. */
+    private static function items_for_status(array $items, $type)
+    {
+        $out = [];
+        foreach ($items as $asin => $x) {
+            $titles = [];
+            foreach ((array) ($x['posts'] ?? []) as $p) {
+                $titles[] = self::short_title($p['title'] ?? '');
+            }
+            $row = ['asin' => (string) $asin, 'articles' => array_slice($titles, 0, 3)];
+            if ($type === 'm') {
+                $row['err']   = (string) ($x['err'] ?? '');
+                $row['since'] = (int) ($x['since'] ?? 0);
+            } else {
+                $row['ref'] = (float) $x['ref'];
+                $row['cur'] = (float) $x['cur'];
+                $row['pct'] = (int) round($x['pct']);
+            }
+            $out[] = $row;
+        }
+        return $out;
+    }
+
     /** État du site sous forme de tableau (utilisé par l'adresse de contrôle et par le bilan du site pilote). */
     public static function status_data()
     {
@@ -174,6 +201,8 @@ final class MCM_Prix
             'cron_late_minutes'  => $next ? max(0, (int) floor((time() - $next) / 60)) : 0,
             'wp_cron_disabled'   => defined('DISABLE_WP_CRON') && DISABLE_WP_CRON,
             'asin_count'         => count((array) get_option(self::OPT_ASINS, [])),
+            'missing'            => self::items_for_status($rep['missing'], 'm'),
+            'deviations'         => self::items_for_status($rep['dev'], 'd'),
             'missing_count'      => count($rep['missing']),
             'deviation_count'    => count($rep['dev']),
             'last_digest'        => !empty($st['last_digest']) ? wp_date('c', (int) $st['last_digest']) : '',
@@ -214,6 +243,13 @@ final class MCM_Prix
             // pas encore planifié, ou l'intervalle réglé a changé : on replanifie
             wp_clear_scheduled_hook(self::CRON_HOOK);
             wp_schedule_event(time() + 60, $want, self::CRON_HOOK);
+        }
+        if (self::opt('pilot') === '1') {
+            if (!wp_next_scheduled(self::CRON_PILOT)) {
+                wp_schedule_event(time() + 300, 'hourly', self::CRON_PILOT);
+            }
+        } elseif (wp_next_scheduled(self::CRON_PILOT)) {
+            wp_clear_scheduled_hook(self::CRON_PILOT);
         }
         if (!wp_next_scheduled(self::CRON_DIGEST)) {
             wp_schedule_event(strtotime('next monday 07:00'), 'mcm_prix_weekly', self::CRON_DIGEST);
@@ -910,6 +946,89 @@ final class MCM_Prix
     }
 
     /** Mémorise la raison d'un échec d'envoi signalé par WordPress. */
+    /**
+     * Alerte quotidienne centralisée (site pilote) : lit tous les sites et envoie UN SEUL e-mail par jour au plus,
+     * seulement s'il y a un nouveau problème sur l'un d'eux. La première lecture mémorise l'état sans rien envoyer.
+     */
+    public static function pilot_daily_alert()
+    {
+        if (self::opt('pilot') !== '1') {
+            return ['sent' => false, 'n' => 0];
+        }
+        $sites = [self::status_data()];
+        foreach (preg_split('/\R+/', (string) self::opt('pilot_urls')) as $u) {
+            $u = trim($u);
+            if ($u === '') {
+                continue;
+            }
+            $d = self::fetch_remote_status($u);
+            if (isset($d['error'])) {
+                $sites[] = ['site' => wp_parse_url($u, PHP_URL_HOST), 'unreachable' => $d['error']];
+            } else {
+                $sites[] = $d;
+            }
+        }
+        $flagged = [];
+        foreach ($sites as $d) {
+            $host = (string) ($d['site'] ?? '?');
+            if (!empty($d['unreachable'])) {
+                $flagged[$host . '|site|u'] = ['host' => $host, 'type' => 'u', 'd' => $d];
+                continue;
+            }
+            foreach ((array) ($d['missing'] ?? []) as $r) {
+                $flagged[$host . '|' . $r['asin'] . '|m'] = ['host' => $host, 'type' => 'm', 'd' => $r];
+            }
+            foreach ((array) ($d['deviations'] ?? []) as $r) {
+                $flagged[$host . '|' . $r['asin'] . '|d'] = ['host' => $host, 'type' => 'd', 'd' => $r];
+            }
+        }
+        $state = get_option(self::OPT_PILOT, null);
+        if (!is_array($state)) {
+            // première lecture : on mémorise l'existant (déjà visible dans le bilan du lundi) sans envoyer
+            update_option(self::OPT_PILOT, ['notified' => array_fill_keys(array_keys($flagged), 1), 'last' => 0], false);
+            return ['sent' => false, 'n' => 0];
+        }
+        $notified = array_intersect_key((array) ($state['notified'] ?? []), $flagged); // un problème résolu pourra être resignalé
+        $new      = array_diff_key($flagged, $notified);
+        $state['notified'] = $notified;
+        if (!$new || (time() - (int) ($state['last'] ?? 0)) < DAY_IN_SECONDS) {
+            update_option(self::OPT_PILOT, $state, false);
+            return ['sent' => false, 'n' => count($new)];
+        }
+        $by = [];
+        foreach ($new as $k => $x) {
+            $by[$x['host']][] = $x;
+        }
+        $lines = ['Nouveaux points à surveiller depuis le dernier e-mail :', ''];
+        foreach ($by as $host => $items) {
+            $lines[] = $host . ' :';
+            foreach ($items as $x) {
+                $r = $x['d'];
+                if ($x['type'] === 'u') {
+                    $lines[] = '    🔴 site injoignable (' . $r['unreachable'] . ')';
+                    continue;
+                }
+                $art = !empty($r['articles']) ? ' — ' . implode(' ; ', $r['articles']) : '';
+                if ($x['type'] === 'm') {
+                    $lines[] = '    🔴 ' . $r['asin'] . ' : sans offre' . (!empty($r['err']) ? ' (' . $r['err'] . ')' : '') . $art;
+                } else {
+                    $lines[] = '    🟠 ' . $r['asin'] . ' : ' . self::money($r['ref']) . ' → ' . self::money($r['cur']) . ' (' . ($r['pct'] > 0 ? '+' : '') . $r['pct'] . ' %)' . $art;
+                }
+            }
+            $lines[] = '';
+        }
+        $lines[] = 'Un seul e-mail par jour au plus, pour l\'ensemble des sites. Les points déjà signalés reviennent dans le bilan du lundi.';
+        unset($GLOBALS['mcm_prix_mail_error']);
+        $n  = count($new);
+        $ok = (bool) wp_mail(self::alert_to(), '[Prix Amazon] ' . $n . ' nouveau(x) point(s) à surveiller sur ' . count($by) . ' site(s)', implode("\n", $lines));
+        if ($ok) {
+            $state['notified'] = array_merge($notified, array_fill_keys(array_keys($new), 1));
+            $state['last']     = time();
+        }
+        update_option(self::OPT_PILOT, $state, false);
+        return ['sent' => $ok, 'n' => $n];
+    }
+
     public static function cron_weekly()
     {
         self::send_digest();
@@ -958,7 +1077,7 @@ final class MCM_Prix
      */
     public static function daily_new_alert()
     {
-        if (self::opt('new_alert') !== '1' || !self::configured()) {
+        if (self::opt('new_alert') !== '1' || !self::configured() || self::opt('pilot') === '1') {
             return;
         }
         $rep      = self::watch_report();
@@ -1644,14 +1763,15 @@ final class MCM_Prix
                             </select> minutes
                             <p class="description">Un prix reste affiché 1 heure au plus, puis le lien de repli prend le relais. Plus l'intervalle est long, moins il reste de marge si WP-Cron prend du retard (site peu visité) : au-delà de 45 minutes, un petit retard suffit à faire basculer des prix sur le lien de repli. 30 minutes est un bon équilibre.</p></td></tr>
                     <tr><th>Bilan de tous les sites</th>
-                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[pilot]" value="1" <?php checked($s['pilot'], '1'); ?>> Ce site est le site pilote : il envoie chaque lundi un seul bilan des 6 sites (même sans alerte)</label>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[pilot]" value="1" <?php checked($s['pilot'], '1'); ?>> Ce site est le site pilote : un bilan des 6 sites chaque lundi (même sans alerte) et une alerte quotidienne unique pour tous les sites</label>
                             <p class="description">Collez ci-dessous l'adresse de contrôle des <strong>autres</strong> sites (section « Adresse de contrôle » de leurs réglages), une par ligne. À activer sur un seul site.</p>
                             <textarea class="large-text code" rows="5" name="<?php echo self::OPT_SETTINGS; ?>[pilot_urls]" placeholder="https://autre-site.fr/wp-json/mcm-prix/v1/status?k=…"><?php echo esc_textarea($s['pilot_urls']); ?></textarea>
                             <p class="description">Ces adresses contiennent des clés en lecture seule : elles ne donnent accès à aucun identifiant Amazon.</p></td></tr>
                     <tr><th>E-mail de synthèse</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[digest]" value="1" <?php checked($s['digest'], '1'); ?>> Envoyer chaque lundi les produits à surveiller (seulement s'il y en a)</label></td></tr>
                     <tr><th>Alerte de nouveaux problèmes</th>
-                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[new_alert]" value="1" <?php checked($s['new_alert'], '1'); ?>> Envoyer un e-mail dès qu'un nouveau produit passe le seuil (au plus un par jour, seulement s'il y a du nouveau)</label></td></tr>
+                        <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[new_alert]" value="1" <?php checked($s['new_alert'], '1'); ?>> Envoyer un e-mail dès qu'un nouveau produit passe le seuil (au plus un par jour, seulement s'il y a du nouveau)</label>
+                            <p class="description">Sur le site pilote, cette alerte est remplacée par une alerte unique qui couvre tous les sites : <strong>décochez-la sur les autres sites</strong> pour ne recevoir qu'un seul e-mail par jour.</p></td></tr>
                     <tr><th><label for="mcm_ad">Produit sans offre</label></th>
                         <td>signalé après <input id="mcm_ad" type="number" min="1" max="30" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[alert_days]" value="<?php echo esc_attr($s['alert_days']); ?>"> jour(s)</td></tr>
                     <tr><th><label for="mcm_dp">Écart de prix</label></th>

@@ -355,6 +355,47 @@ check('case écart de prix décochée -> désactivée', $san['dev_alert'] === '0
 $st['dev_alert'] = '1'; update_option('mcm_prix_settings', $st);
 $meta = get_option('mcm_prix_meta'); $meta['B0GHN39ZGJ']['ref'] = 340.0; update_option('mcm_prix_meta', $meta);
 
+// alerte quotidienne centralisée par le site pilote : un seul e-mail par jour pour tous les sites
+$st = get_option('mcm_prix_settings'); $st['pilot'] = '1'; $st['new_alert'] = '1'; $st['digest'] = '1';
+$st['pilot_urls'] = "https://a.test/wp-json/mcm-prix/v1/status?k=AAA\nhttps://b.test/wp-json/mcm-prix/v1/status?k=BBB"; update_option('mcm_prix_settings', $st);
+unset($GLOBALS['__opts']['mcm_prix_pilot_state']);
+$meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = 0; $meta['B0GHN39ZGJ']['missing_since'] = 0; update_option('mcm_prix_meta', $meta);
+$mk = function ($host, $missing = [], $dev = []) { return ['code' => 200, 'body' => json_encode(['site' => $host, 'plugin_version' => MCM_Prix::VERSION, 'configured' => true, 'missing' => $missing, 'deviations' => $dev])]; };
+$GLOBALS['__http_get'] = [$mk('a.test', [['asin' => 'AAAAAAAAAA', 'err' => '', 'since' => 1, 'articles' => ['Art A']]]), $mk('b.test')];
+unset($GLOBALS['__mail']); $r = MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : première lecture = mémorisation sans e-mail', !isset($GLOBALS['__mail']) && $r['sent'] === false);
+$GLOBALS['__http_get'] = [$mk('a.test', [['asin' => 'AAAAAAAAAA', 'err' => '', 'since' => 1, 'articles' => ['Art A']]]), $mk('b.test')];
+unset($GLOBALS['__mail']); MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : rien de nouveau -> aucun e-mail', !isset($GLOBALS['__mail']));
+$GLOBALS['__http_get'] = [$mk('a.test', [['asin' => 'AAAAAAAAAA', 'err' => '', 'since' => 1, 'articles' => ['Art A']]]), $mk('b.test', [['asin' => 'BBBBBBBBBB', 'err' => 'ItemNotAccessible', 'since' => 1, 'articles' => ['Art B']]], [['asin' => 'CCCCCCCCCC', 'ref' => 100.0, 'cur' => 60.0, 'pct' => -40, 'articles' => []]])];
+unset($GLOBALS['__mail']); $r = MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : nouveau problème -> UN e-mail pour tous les sites', isset($GLOBALS['__mail']) && $r['sent'] === true && strpos($GLOBALS['__mail'][1], '2 nouveau(x)') !== false && strpos($GLOBALS['__mail'][2], 'b.test') !== false && strpos($GLOBALS['__mail'][2], '🔴 BBBBBBBBBB') !== false && strpos($GLOBALS['__mail'][2], '🟠 CCCCCCCCCC') !== false);
+check('pilote quotidien : le site déjà connu (a.test) n\'est pas répété', strpos($GLOBALS['__mail'][2], 'AAAAAAAAAA') === false && strpos($GLOBALS['__mail'][2], 'AAA') === false);
+$GLOBALS['__http_get'] = [$mk('a.test', [['asin' => 'AAAAAAAAAA', 'err' => '', 'since' => 1, 'articles' => []], ['asin' => 'DDDDDDDDDD', 'err' => '', 'since' => 1, 'articles' => []]]), $mk('b.test', [['asin' => 'BBBBBBBBBB', 'err' => '', 'since' => 1, 'articles' => []]], [['asin' => 'CCCCCCCCCC', 'ref' => 100.0, 'cur' => 60.0, 'pct' => -40, 'articles' => []]])];
+unset($GLOBALS['__mail']); MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : au plus un e-mail par jour (nouveau problème attend)', !isset($GLOBALS['__mail']));
+$ps = get_option('mcm_prix_pilot_state'); $ps['last'] = time() - 25 * 3600; update_option('mcm_prix_pilot_state', $ps);
+$GLOBALS['__http_get'] = [$mk('a.test', [['asin' => 'AAAAAAAAAA', 'err' => '', 'since' => 1, 'articles' => []], ['asin' => 'DDDDDDDDDD', 'err' => '', 'since' => 1, 'articles' => []]]), $mk('b.test', [['asin' => 'BBBBBBBBBB', 'err' => '', 'since' => 1, 'articles' => []]], [['asin' => 'CCCCCCCCCC', 'ref' => 100.0, 'cur' => 60.0, 'pct' => -40, 'articles' => []]])];
+unset($GLOBALS['__mail']); MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : le lendemain, seul le nouveau est signalé', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'DDDDDDDDDD') !== false && strpos($GLOBALS['__mail'][2], 'BBBBBBBBBB') === false);
+$GLOBALS['__http_get'] = [new WP_Error('x', 'délai dépassé'), $mk('b.test')];
+$ps = get_option('mcm_prix_pilot_state'); $ps['last'] = 0; update_option('mcm_prix_pilot_state', $ps);
+unset($GLOBALS['__mail']); MCM_Prix::pilot_daily_alert();
+check('pilote quotidien : site injoignable signalé une fois', isset($GLOBALS['__mail']) && strpos($GLOBALS['__mail'][2], 'injoignable') !== false);
+check('pilote quotidien : aucune adresse ni clé dans l\'e-mail', strpos($GLOBALS['__mail'][2], 'k=') === false && strpos($GLOBALS['__mail'][2], 'https://') === false);
+// l'alerte par site est remplacée sur le site pilote
+$meta = get_option('mcm_prix_meta'); $meta['B0GQVBWMN8']['missing_since'] = time() - 5 * 86400; update_option('mcm_prix_meta', $meta);
+$stt = get_option('mcm_prix_status'); unset($stt['notified'], $stt['last_new_alert']); update_option('mcm_prix_status', $stt);
+unset($GLOBALS['__mail']); MCM_Prix::daily_new_alert();
+check('site pilote : l\'alerte par site est remplacée par l\'alerte centralisée', !isset($GLOBALS['__mail']));
+$meta['B0GQVBWMN8']['missing_since'] = 0; update_option('mcm_prix_meta', $meta);
+$st['pilot'] = '0'; update_option('mcm_prix_settings', $st);
+$GLOBALS['__http_get'] = [];
+$r = MCM_Prix::pilot_daily_alert();
+check('pilote désactivé : aucune alerte centralisée', $r['sent'] === false);
+$sd = MCM_Prix::status_data();
+check('état : détail des produits à surveiller exposé', isset($sd['missing'], $sd['deviations']) && is_array($sd['missing']));
+
 // --- 9. Textes réglables -----------------------------------------------------------------
 $st = get_option('mcm_prix_settings');
 $st['fallback_label'] = 'Consulter l’offre'; $st['details_label'] = 'Détails'; $st['legal_text'] = 'Avis perso sur {boutique}.';

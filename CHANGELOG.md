@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.4.0
+- Alerte quotidienne centralisée : le site pilote lit tous les sites et envoie UN SEUL e-mail par jour au plus pour l'ensemble des sites (seulement s'il y a un nouveau problème). La première lecture mémorise l'existant sans rien envoyer.
+- Sur le site pilote, l'alerte par site est remplacée par cette alerte unique ; sur les autres sites, la case « Alerte de nouveaux problèmes » est à décocher.
+- L'adresse de contrôle expose le détail des produits sans offre et des écarts de prix (lecture seule, protégée par la clé).
+
 ## 1.3.6
 - E-mails : pastilles de couleur (🔴 produit sans offre ou problème grave, 🟠 écart de prix ou point à relire, 🟢 site en ordre) dans la synthèse, l'alerte quotidienne et le bilan des sites.
 
