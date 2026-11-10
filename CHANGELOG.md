@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.4.1
+- E-mails d'alerte plus lisibles : nom du produit devant son code, titre complet de l'article et lien pour le modifier sur des lignes séparées.
+- Correction : le lien de modification de l'article était vide dans les e-mails envoyés par tâche planifiée ; il est désormais toujours présent.
+- Correction : les apostrophes des titres s'affichaient « &rsquo; ».
+
 ## 1.4.0
 - Alerte quotidienne centralisée : le site pilote lit tous les sites et envoie UN SEUL e-mail par jour au plus pour l'ensemble des sites (seulement s'il y a un nouveau problème). La première lecture mémorise l'existant sans rien envoyer.
 - Sur le site pilote, l'alerte par site est remplacée par cette alerte unique ; sur les autres sites, la case « Alerte de nouveaux problèmes » est à décocher.

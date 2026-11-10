@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.4.0
+ * Version:     1.4.1
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.4.0';
+    const VERSION      = '1.4.1';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -162,11 +162,11 @@ final class MCM_Prix
     {
         $out = [];
         foreach ($items as $asin => $x) {
-            $titles = [];
-            foreach ((array) ($x['posts'] ?? []) as $p) {
-                $titles[] = self::short_title($p['title'] ?? '');
+            $posts = [];
+            foreach (array_slice((array) ($x['posts'] ?? []), 0, 3) as $p) {
+                $posts[] = ['title' => self::plain($p['title'] ?? ''), 'url' => (string) ($p['url'] ?? '')];
             }
-            $row = ['asin' => (string) $asin, 'articles' => array_slice($titles, 0, 3)];
+            $row = ['asin' => (string) $asin, 'name' => (string) ($x['name'] ?? ''), 'posts' => $posts];
             if ($type === 'm') {
                 $row['err']   = (string) ($x['err'] ?? '');
                 $row['since'] = (int) ($x['since'] ?? 0);
@@ -716,6 +716,12 @@ final class MCM_Prix
     }
 
     /** Liste d'articles (titre + lien de modification) pour un ASIN. */
+    /** Texte brut : sans balises, entités HTML décodées (&rsquo; devient ’). */
+    private static function plain($t)
+    {
+        return trim(html_entity_decode(wp_strip_all_tags((string) $t), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
     private static function posts_for($asin, array $meta)
     {
         $out = [];
@@ -724,7 +730,7 @@ final class MCM_Prix
             if (!$p || $p->post_status === 'trash') {
                 continue;
             }
-            $out[] = ['title' => get_the_title($p), 'id' => (int) $p->ID, 'url' => get_edit_post_link($p->ID, 'raw'), 'view' => get_permalink($p)];
+            $out[] = ['title' => self::plain(get_the_title($p)), 'id' => (int) $p->ID, 'url' => admin_url('post.php?post=' . (int) $p->ID . '&action=edit'), 'view' => get_permalink($p)];
         }
         return $out;
     }
@@ -745,7 +751,7 @@ final class MCM_Prix
     /** Titre court : coupé au premier « : », sinon tronqué à 50 caractères. */
     private static function short_title($title)
     {
-        $title = trim(wp_strip_all_tags((string) $title));
+        $title = self::plain($title);
         $pos   = mb_strpos($title, ':');
         if ($pos !== false && $pos > 0) {
             $title = trim(mb_substr($title, 0, $pos));
@@ -787,14 +793,14 @@ final class MCM_Prix
             $m     = isset($meta[$a]) && is_array($meta[$a]) ? $meta[$a] : [];
             $since = (int) ($m['missing_since'] ?? 0);
             if ($since && (time() - $since) >= $days * DAY_IN_SECONDS) {
-                $missing[$a] = ['since' => $since, 'err' => (string) ($cache[$a]['err'] ?? ''), 'posts' => self::posts_for($a, $meta)];
+                $missing[$a] = ['since' => $since, 'err' => (string) ($cache[$a]['err'] ?? ''), 'name' => self::product_name($a, $meta), 'posts' => self::posts_for($a, $meta)];
             }
             $e = $cache[$a] ?? [];
             if (self::opt('dev_alert') === '1' && !empty($e['offer']) && !empty($m['ref'])) {
                 $cur = (float) $e['offer']['amount'];
                 $d   = ($cur - (float) $m['ref']) / (float) $m['ref'] * 100;
                 if (abs($d) >= $pct) {
-                    $dev[$a] = ['ref' => (float) $m['ref'], 'cur' => $cur, 'pct' => $d, 'posts' => self::posts_for($a, $meta)];
+                    $dev[$a] = ['ref' => (float) $m['ref'], 'cur' => $cur, 'pct' => $d, 'name' => self::product_name($a, $meta), 'posts' => self::posts_for($a, $meta)];
                 }
             }
         }
@@ -1008,11 +1014,12 @@ final class MCM_Prix
                     $lines[] = '    🔴 site injoignable (' . $r['unreachable'] . ')';
                     continue;
                 }
-                $art = !empty($r['articles']) ? ' — ' . implode(' ; ', $r['articles']) : '';
                 if ($x['type'] === 'm') {
-                    $lines[] = '    🔴 ' . $r['asin'] . ' : sans offre' . (!empty($r['err']) ? ' (' . $r['err'] . ')' : '') . $art;
+                    $what = 'sans offre' . (!empty($r['err']) ? ' (' . $r['err'] . ')' : '');
+                    $lines = array_merge($lines, self::item_block('🔴', $r['asin'], $r['name'] ?? '', $what, (array) ($r['posts'] ?? []), '    '));
                 } else {
-                    $lines[] = '    🟠 ' . $r['asin'] . ' : ' . self::money($r['ref']) . ' → ' . self::money($r['cur']) . ' (' . ($r['pct'] > 0 ? '+' : '') . $r['pct'] . ' %)' . $art;
+                    $what = self::money($r['ref']) . ' → ' . self::money($r['cur']) . ' (' . ($r['pct'] > 0 ? '+' : '') . $r['pct'] . ' %)';
+                    $lines = array_merge($lines, self::item_block('🟠', $r['asin'], $r['name'] ?? '', $what, (array) ($r['posts'] ?? []), '    '));
                 }
             }
             $lines[] = '';
@@ -1045,26 +1052,36 @@ final class MCM_Prix
     }
 
     /** Lignes de texte d'un rapport (produits sans offre, écarts de prix) pour les e-mails. */
+    /** Bloc d'un produit pour un e-mail : nom (ASIN), ce qui ne va pas, puis chaque article concerné avec son lien de modification. */
+    private static function item_block($dot, $asin, $name, $what, array $posts, $indent = '')
+    {
+        $name  = trim((string) $name);
+        $lines = [$indent . $dot . ' ' . ($name !== '' ? $name . ' (' . $asin . ')' : $asin) . ' : ' . $what];
+        foreach (array_slice($posts, 0, 3) as $p) {
+            $lines[] = $indent . '    Article : ' . self::plain($p['title'] ?? '');
+            if (!empty($p['url'])) {
+                $lines[] = $indent . '    Modifier : ' . $p['url'];
+            }
+        }
+        return $lines;
+    }
+
     private static function report_lines(array $rep)
     {
         $lines = [];
         if ($rep['missing']) {
             $lines[] = '🔴 PRODUITS SANS OFFRE (à remplacer ou à vérifier) :';
             foreach ($rep['missing'] as $a => $x) {
-                $lines[] = '🔴 ' . $a . ' : sans offre depuis ' . human_time_diff($x['since']) . ($x['err'] !== '' ? ' (' . $x['err'] . ')' : '');
-                foreach ($x['posts'] as $p) {
-                    $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
-                }
+                $what  = 'sans offre depuis ' . human_time_diff($x['since']) . ($x['err'] !== '' ? ' (' . $x['err'] . ')' : '');
+                $lines = array_merge($lines, self::item_block('🔴', $a, $x['name'] ?? '', $what, $x['posts']));
             }
             $lines[] = '';
         }
         if ($rep['dev']) {
             $lines[] = '🟠 PRIX QUI S\'ÉCARTENT DE LA RÉFÉRENCE (relire le texte de l\'article) :';
             foreach ($rep['dev'] as $a => $x) {
-                $lines[] = '🟠 ' . $a . ' : ' . self::money($x['ref']) . ' → ' . self::money($x['cur']) . ' (' . ($x['pct'] > 0 ? '+' : '') . round($x['pct']) . ' %)';
-                foreach ($x['posts'] as $p) {
-                    $lines[] = '    article : ' . $p['title'] . ' — ' . $p['url'];
-                }
+                $what  = self::money($x['ref']) . ' → ' . self::money($x['cur']) . ' (' . ($x['pct'] > 0 ? '+' : '') . round($x['pct']) . ' %)';
+                $lines = array_merge($lines, self::item_block('🟠', $a, $x['name'] ?? '', $what, $x['posts']));
             }
             $lines[] = '';
         }
