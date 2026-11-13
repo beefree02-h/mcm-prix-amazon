@@ -267,6 +267,11 @@ check('valeur hors liste (58) ramenée à 30', $san['refresh_min'] === '30');
 $san = MCM_Prix::sanitize_settings(['refresh_min' => '20']);
 check('valeur valide (20) conservée', $san['refresh_min'] === '20');
 $st['refresh_min'] = '30'; update_option('mcm_prix_settings', $st);
+$san = MCM_Prix::sanitize_settings(['refresh_offset' => '99']);
+check('décalage borné à 55', $san['refresh_offset'] === '55');
+$san = MCM_Prix::sanitize_settings(['refresh_offset' => '10']);
+check('décalage 10 conservé', $san['refresh_offset'] === '10');
+check('décalage par défaut : 0', MCM_Prix::refresh_offset() === 0);
 
 // adresse de contrôle
 check('clé de contrôle générée', strlen((string) get_option('mcm_prix_key')) === 32);

@@ -1,5 +1,8 @@
 # Journal des versions
 
+## 1.5.0
+- Nouveau réglage « Décalage de démarrage » (0 à 55 minutes, 0 par défaut) : étale les actualisations des sites dans le temps pour éviter qu'ils interrogent Amazon au même moment (limites de débit, erreurs 429). Pris en compte dès l'enregistrement : la tâche est replanifiée.
+
 ## 1.4.1
 - E-mails d'alerte plus lisibles : nom du produit devant son code, titre complet de l'article et lien pour le modifier sur des lignes séparées.
 - Correction : le lien de modification de l'article était vide dans les e-mails envoyés par tâche planifiée ; il est désormais toujours présent.

@@ -1,9 +1,9 @@
 {
-  "version": "1.4.1",
-  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.4.1.zip",
-  "sha256": "9ca1597cd0e3b99fd55dfd0a5184f3fd9f204f7525eeed24cc1cb73c17ff7534",
+  "version": "1.5.0",
+  "package": "https://raw.githubusercontent.com/beefree02-h/mcm-prix-amazon/main/dist/mcm-prix-amazon-1.5.0.zip",
+  "sha256": "46c2d8849a4769484a74786ce79461610b38619ec0a93e7a200517b6488493fe",
   "homepage": "https://github.com/beefree02-h/mcm-prix-amazon",
   "requires": "5.8",
   "requires_php": "7.4",
-  "changelog": "- E-mails d'alerte plus lisibles : nom du produit devant son code, titre complet de l'article et lien pour le modifier sur des lignes séparées.\n- Correction : le lien de modification de l'article était vide dans les e-mails envoyés par tâche planifiée ; il est désormais toujours présent.\n- Correction : les apostrophes des titres s'affichaient « &rsquo; »."
+  "changelog": "- Nouveau réglage « Décalage de démarrage » (0 à 55 minutes, 0 par défaut) : étale les actualisations des sites dans le temps pour éviter qu'ils interrogent Amazon au même moment (limites de débit, erreurs 429). Pris en compte dès l'enregistrement : la tâche est replanifiée."
 }

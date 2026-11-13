@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Prix Amazon Creators
  * Description: Affiche des prix Amazon actualisés via l'API Creators avec le shortcode [prix asin="..."]. Bascule automatiquement vers un lien simple si le prix n'est plus à jour. Mises à jour automatiques depuis GitHub.
- * Version:     1.4.1
+ * Version:     1.5.0
  * Requires PHP: 7.4
  * Requires at least: 5.8
  * License: GPL-2.0-or-later
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 
 final class MCM_Prix
 {
-    const VERSION      = '1.4.1';
+    const VERSION      = '1.5.0';
     const REFRESH_CHOICES = [10, 15, 20, 30, 45, 55]; // minutes ; un prix reste valable 1 h (TTL)
     const SLUG         = 'mcm-prix-amazon';
 
@@ -227,6 +227,12 @@ final class MCM_Prix
         return in_array($m, self::REFRESH_CHOICES, true) ? $m : 30;
     }
 
+    /** Décalage de démarrage (minutes, 0 à 55) pour étaler les sites dans le temps. */
+    public static function refresh_offset()
+    {
+        return min(55, max(0, (int) self::opt('refresh_offset')));
+    }
+
     private static function refresh_schedule()
     {
         return 'mcm_prix_' . self::refresh_minutes() . 'min';
@@ -239,10 +245,12 @@ final class MCM_Prix
         }
         $want = self::refresh_schedule();
         $ev   = function_exists('wp_get_scheduled_event') ? wp_get_scheduled_event(self::CRON_HOOK) : false;
-        if (!$ev || $ev->schedule !== $want) {
-            // pas encore planifié, ou l'intervalle réglé a changé : on replanifie
+        $off = self::refresh_offset();
+        if (!$ev || $ev->schedule !== $want || (int) get_option('mcm_prix_offset_applied', 0) !== $off) {
+            // pas encore planifié, ou l'intervalle / le décalage réglé a changé : on replanifie
             wp_clear_scheduled_hook(self::CRON_HOOK);
-            wp_schedule_event(time() + 60, $want, self::CRON_HOOK);
+            wp_schedule_event(time() + 60 + $off * 60, $want, self::CRON_HOOK);
+            update_option('mcm_prix_offset_applied', $off, false);
         }
         if (self::opt('pilot') === '1') {
             if (!wp_next_scheduled(self::CRON_PILOT)) {
@@ -278,6 +286,7 @@ final class MCM_Prix
             'pilot'          => '0',
             'pilot_urls'     => '',
             'refresh_min'    => '30',
+            'refresh_offset' => '0',
             'alert_days'     => '3',
             'deviation_pct'  => '30',
             'dev_alert'      => '1',
@@ -1433,6 +1442,7 @@ final class MCM_Prix
         }
         $rm                   = (int) ($in['refresh_min'] ?? 30);
         $out['refresh_min']   = (string) (in_array($rm, self::REFRESH_CHOICES, true) ? $rm : 30);
+        $out['refresh_offset'] = (string) min(55, max(0, (int) ($in['refresh_offset'] ?? 0)));
         $out['alert_days']    = (string) min(30, max(1, (int) ($in['alert_days'] ?? 3)));
         $out['deviation_pct'] = (string) min(90, max(5, (int) ($in['deviation_pct'] ?? 30)));
         $out['dev_alert']     = !empty($in['dev_alert']) ? '1' : '0';
@@ -1779,6 +1789,9 @@ final class MCM_Prix
                             <?php endforeach; ?>
                             </select> minutes
                             <p class="description">Un prix reste affiché 1 heure au plus, puis le lien de repli prend le relais. Plus l'intervalle est long, moins il reste de marge si WP-Cron prend du retard (site peu visité) : au-delà de 45 minutes, un petit retard suffit à faire basculer des prix sur le lien de repli. 30 minutes est un bon équilibre.</p></td></tr>
+                    <tr><th><label for="mcm_ro">Décalage de démarrage</label></th>
+                        <td><input type="number" id="mcm_ro" min="0" max="55" step="1" style="width:70px" name="<?php echo self::OPT_SETTINGS; ?>[refresh_offset]" value="<?php echo (int) $s['refresh_offset']; ?>"> minutes
+                            <p class="description">Retarde la première actualisation après l'enregistrement, pour que vos sites n'interrogent pas Amazon au même moment (ex. 0, 5, 10, 15, 20, 25 selon le site). Les horaires restent indicatifs : WP-Cron dépend des visites.</p></td></tr>
                     <tr><th>Bilan de tous les sites</th>
                         <td><label><input type="checkbox" name="<?php echo self::OPT_SETTINGS; ?>[pilot]" value="1" <?php checked($s['pilot'], '1'); ?>> Ce site est le site pilote : un bilan des 6 sites chaque lundi (même sans alerte) et une alerte quotidienne unique pour tous les sites</label>
                             <p class="description">Collez ci-dessous l'adresse de contrôle des <strong>autres</strong> sites (section « Adresse de contrôle » de leurs réglages), une par ligne. À activer sur un seul site.</p>
